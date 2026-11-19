@@ -163,7 +163,7 @@
 
 ## Phase 5：OLED 顯示與自適應調光（`oled_ui`）
 
-- [ ] **T-05-01：實作 SSD1306 128x64 Framebuffer 繪圖引擎與狀態列 UI**
+- [x] **T-05-01：實作 SSD1306 128x64 Framebuffer 繪圖引擎與狀態列 UI**
   - **目標檔案**：`components/oled_ui/CMakeLists.txt`、`components/oled_ui/oled_ui.c`
   - **實作規格**：
     1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp freertos`。
@@ -173,7 +173,7 @@
        - **中央主視覺區（Y=16~47）**：大字體顯示 `HH:MM:SS` 時間或語音狀態表情/波形動畫（待機 / 聆聽中 / 思考中 / 播放中）。
        - **底部資訊列（Y=48~63）**：顯示即時溫度（`°C`）、濕度（`%`）與照度（`lx`）。
 
-- [ ] **T-05-02：實作環境光自適應背光調光與 `oled_ui` 單元測試**
+- [x] **T-05-02：實作環境光自適應背光調光與 `oled_ui` 單元測試**
   - **目標檔案**：`components/oled_ui/oled_ui.c`、`components/oled_ui/test/test_oled_ui.c`
   - **實作規格**：
     1. 建立 UI 刷新任務 `task_oled_refresh`（**釘選於 Core 1**，優先級 2，刷新率 `10 FPS` / 100ms 週期）。

@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "test_oled_ui.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        unity
+        oled_ui
+        board_bsp
+        board_config
+)

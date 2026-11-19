@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "oled_ssd1306.c"
+        "oled_ui.c"
+    INCLUDE_DIRS
+        "include"
+        "."
+    REQUIRES
+        board_bsp
+        board_config
+)
