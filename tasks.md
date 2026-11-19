@@ -209,14 +209,14 @@
 
 ## Phase 7：三態網路、按時間順序補傳與全系統總組裝（`net_manager` + `main`）
 
-- [ ] **T-07-01：實作三態網路狀態機（AP 配網 / STA 在線 / 離線降級）與 NVS 設定存取**
+- [x] **T-07-01：實作三態網路狀態機（AP 配網 / STA 在線 / 離線降級）與 NVS 設定存取**
   - **目標檔案**：`components/net_manager/CMakeLists.txt`、`components/net_manager/net_manager.c`
   - **實作規格**：
     1. `CMakeLists.txt` 設定：`REQUIRES board_bsp psram_cache eeprom_blackbox sd_media env_sensors sensor_hub esp_wifi esp_netif esp_event esp_http_server esp_http_client nvs_flash lwip`。
     2. 從 NVS 讀取儲存的 Wi-Fi SSID/密碼與伺服器 URL；若 NVS 為空、開機按住模式鍵或收到外部模式切換請求（`net_manager_set_mode(NET_MODE_WEB_CFG)`），啟動 SoftAP（SSID: `Xiaozhi-Setup`）與內建輕量 HTTP 設定網頁（可設定 Wi-Fi、Server URL 與時區，並執行參數邊界檢查）。
     3. 若有 Wi-Fi 設定則啟動 STA 連線並開啟 `esp_sntp.h`（**嚴禁使用舊版 `sntp.h`**）校時，校時成功後自動寫回 DS3231 RTC；若連續重連失敗超過 3 次或切換至 `NET_MODE_OFFLINE`，自動進入離線降級模式（背景每 30 秒低功耗探測重連，絕不阻塞本機語音/感測/OLED）。
 
-- [ ] **T-07-02：實作四級離線容災寫入管線與「按時間順序」斷網補傳引擎**
+- [x] **T-07-02：實作四級離線容災寫入管線與「按時間順序」斷網補傳引擎**
   - **目標檔案**：`components/net_manager/net_manager.c`
   - **實作規格**：
     1. **寫入管線**：背景任務定期從已完成的 `psram_cache_peek_batch()` 取出紀錄；若當前為 `NET_MODE_ONLINE` 則優先 HTTP POST 批次上傳伺服器（收到 HTTP 200 後呼叫 `psram_cache_commit_pop()`）；若離線或上傳失敗，則依序降級寫入 `sd_media_append_logs()`（SD 卡存在時）或 `eeprom_blackbox_append()`（SD 卡拔除或損壞時）。
@@ -225,7 +225,7 @@
        - **第二步**：接著呼叫 `sd_media_read_unsynced()` 掃描 SD 卡 `/sdcard/logs/` 下檔名日期最舊的未同步 `YYYYMMDD.bin` 檔案，逐批上傳並確認伺服器 ACK 後標記為已同步。
        - **第三步**：最後才恢復 `psram_cache` 即時資料流上傳，確保伺服器端收到的時間序列 100% 連續且不亂序。
 
-- [ ] **T-07-03：實作雲端語音對話上傳與 TTS 串流播放對接**
+- [x] **T-07-03：實作雲端語音對話上傳與 TTS 串流播放對接**
   - **目標檔案**：`components/net_manager/net_manager.c`
   - **實作規格**：
     1. 當 Core 1 語音引擎觸發 `AUDIO_EVENT_SPEECH_END`（且非 Phase 8 已命中之本機離線指令）時，透過 FreeRTOS Queue 通知 Core 0 網路任務（**釘選於 Core 0**，優先級 4）。
