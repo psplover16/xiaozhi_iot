@@ -10,7 +10,7 @@
 
 ## 前置準備階段（手動建立專案骨架與外部依賴）
 
-- [ ] **T-PRE-01：建立專案目錄結構與建置基礎檔**
+- [x] **T-PRE-01：建立專案目錄結構與建置基礎檔**
   - **目標檔案**：`CMakeLists.txt`、`sdkconfig.defaults`、`partitions.csv`、`main/CMakeLists.txt`、`main/main.c`
   - **實作規格**：
     1. 依照 `plan.md` 第 2.1 節建立完整目錄樹（含 `components/` 下 8 個元件資料夾及其 `include/` 與 `test/` 子目錄）。
@@ -19,13 +19,13 @@
     4. `sdkconfig.defaults` 強制開啟：`CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y`、`CONFIG_SPIRAM=y`、`CONFIG_SPIRAM_MODE_OCT=y`、`CONFIG_SPIRAM_SPEED_80M=y`、`CONFIG_PARTITION_TABLE_CUSTOM=y`、`CONFIG_FREERTOS_HZ=1000`。
     5. `main/main.c` 先寫最小可編譯 `app_main()`（僅印出開機 Log），執行 `idf.py build` 確認基礎環境無誤。
 
-- [ ] **T-PRE-02：手動放入單檔 MP3 解碼庫 `dr_mp3.h`（人工操作）**
+- [x] **T-PRE-02：手動放入單檔 MP3 解碼庫 `dr_mp3.h`（人工操作）**
   - **目標檔案**：`components/sd_media/include/dr_mp3.h`
   - **實作規格**：
     1. 從官方開源庫 `mackron/dr_libs` 下載最新單檔標頭檔 `dr_mp3.h`，手動複製至 `components/sd_media/include/dr_mp3.h`。
     2. 確認檔案存在且非空（此檔在 Phase 3 才會被 `#include` 編譯）。
 
-- [ ] **T-PRE-03：建立全部 8 個元件的鎖定標頭檔（`.h`）**
+- [x] **T-PRE-03：建立全部 8 個元件的鎖定標頭檔（`.h`）**
   - **目標檔案**：
     - `components/board_bsp/include/board_bsp.h`
     - `components/psram_cache/include/psram_cache.h`
@@ -43,26 +43,26 @@
 
 ## Phase 0：硬體抽象基礎層（`board_bsp`）
 
-- [ ] **T-00-01：建立 `board_bsp` 建置檔與腳位常數定義**
+- [x] **T-00-01：建立 `board_bsp` 建置檔與腳位常數定義**
   - **目標檔案**：`components/board_bsp/CMakeLists.txt`、`components/board_bsp/board_bsp.c`（骨架）
   - **實作規格**：
     1. `CMakeLists.txt` 依 `plan.md` 第 2.3 節設定：`REQUIRES driver esp_driver_gpio esp_driver_i2c esp_driver_i2s esp_driver_spi esp_driver_ledc`。
     2. 在 `board_bsp.c` 中以 `#define` 鎖死 `spec.md` 腳位表（I2C SDA=GPIO 8 / SCL=GPIO 9、SPI MOSI=GPIO 11 / MISO=GPIO 13 / CLK=GPIO 12 / SD_CS=GPIO 10、I2S_IN BCLK=GPIO 4 / WS=GPIO 5 / DIN=GPIO 6、I2S_OUT BCLK=GPIO 15 / LRC=GPIO 16 / DOUT=GPIO 7、DHT22=GPIO 14、Mode_BTN=GPIO 1、Backlight_PWM=GPIO 2）。
 
-- [ ] **T-00-02：實作 I2C Master 匯流排與執行緒安全 Mutex 讀寫**
+- [x] **T-00-02：實作 I2C Master 匯流排與執行緒安全 Mutex 讀寫**
   - **目標檔案**：`components/board_bsp/board_bsp.c`
   - **實作規格**：
     1. 使用 ESP-IDF v6.1.1 新版 API `i2c_new_master_bus()` 初始化 I2C0（`400 kHz`、內部上拉致能），並建立一把全域 `SemaphoreHandle_t` 互斥鎖保護整條 I2C 匯流排。
     2. 實作 `board_i2c_write()` 與 `board_i2c_read()`：動態取得或快取對應 `dev_addr` 的 `i2c_master_dev_handle_t`，每次傳輸前後必須 `xSemaphoreTake` / `xSemaphoreGive`（逾時 100ms），確保多核心同時存取 OLED、RTC、GY-30 與 EEPROM 時絕不發生匯流排碰撞。
 
-- [ ] **T-00-03：實作 SPI 匯流排、GPIO 按鍵與 LEDC 背光 PWM**
+- [x] **T-00-03：實作 SPI 匯流排、GPIO 按鍵與 LEDC 背光 PWM**
   - **目標檔案**：`components/board_bsp/board_bsp.c`
   - **實作規格**：
     1. 使用 `spi_bus_initialize()` 初始化 `SPI2_HOST`（DMA 自動通道），供後續 SD 卡掛載使用。
     2. 初始化 `GPIO 1` 為輸入模式並開啟內部上拉（`GPIO_PULLUP_ONLY`），實作 `board_btn_is_pressed()`（低電位為按下）。
     3. 初始化 LEDC Timer 與 Channel 輸出 PWM 至 `GPIO 2`（頻率 `5 kHz`、8-bit 解析度 `0~255`），實作 `board_set_backlight(uint8_t duty)`。
 
-- [ ] **T-00-04：撰寫 `board_bsp` 單元測試與開機測試分流**
+- [x] **T-00-04：撰寫 `board_bsp` 單元測試與開機測試分流**
   - **目標檔案**：`components/board_bsp/test/test_board_bsp.c`、`main/main.c`
   - **實作規格**：
     1. 在 `test_board_bsp.c` 撰寫 Unity 測試：掃描 I2C 匯流排確認至少能偵測到 `0x3C` (OLED)、`0x68` (DS3231)、`0x23` (GY-30)、`0x50` (AT24C256) 之 ACK 回應，並測試 `board_set_backlight()` 正常不崩潰。
