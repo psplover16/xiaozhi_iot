@@ -173,3 +173,28 @@ TEST_CASE("Playback barge-in stop latency within 50 ms", "[audio_engine]")
     TEST_ASSERT_FALSE(sd_media_is_playing());
     TEST_ASSERT_LESS_OR_EQUAL_INT64(50LL, elapsed_ms);
 }
+
+static volatile uint32_t s_tap_call_count = 0;
+
+static void test_pcm_tap_cb(const int16_t *stereo_pcm, size_t frames)
+{
+    (void)stereo_pcm;
+    (void)frames;
+    s_tap_call_count++;
+}
+
+TEST_CASE("PCM Tap registration and unregistration", "[audio_engine]")
+{
+    ensure_audio_test_env();
+
+    s_tap_call_count = 0;
+    audio_engine_register_pcm_tap(test_pcm_tap_cb);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    /* 取消註冊 (傳入 NULL) 後不應發生空指標崩潰，且計數不再增加 */
+    audio_engine_register_pcm_tap(NULL);
+    uint32_t count_after_unreg = s_tap_call_count;
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    TEST_ASSERT_EQUAL_UINT32(count_after_unreg, s_tap_call_count);
+}

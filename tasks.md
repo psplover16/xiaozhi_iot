@@ -199,7 +199,7 @@
     2. **動態取樣率切換強制規範**：實作 `audio_engine_play_file(const char *filepath)`，先呼叫 `sd_media_open_audio()` 取得音訊檔真實取樣率（如 `16000 Hz`、`22050 Hz`、`44100 Hz` 或 `48000 Hz`），接著依序執行 **`i2s_channel_disable(tx_chan)` → `i2s_channel_reconfig_std_clock(tx_chan, &clk_cfg)` → `i2s_channel_enable(tx_chan)`**，防止播放不同取樣率的 MP3/WAV 時變調或破音；並提供同步等待播放完畢機制，支援 Phase 8 多段短 WAV 音節連續無縫拼接播報。
     3. 實作軟體數位音量縮放（`audio_engine_set_volume(uint8_t pct)`，`0~100%` 步進 `10%`）、靜音切換（`audio_engine_set_mute(bool mute)`）與 `audio_engine_stop_playback()` 隨時打斷播放（Barge-in 支援）。
 
-- [ ] **T-06-03：撰寫 `audio_engine` 音訊管線、PCM Tap 與 I2S 時脈切換單元測試**
+- [x] **T-06-03：撰寫 `audio_engine` 音訊管線、PCM Tap 與 I2S 時脈切換單元測試**
   - **目標檔案**：`components/audio_engine/test/test_audio_engine.c`
   - **實作規格**：
     1. 建立 `task_audio_io`（**釘選於 Core 1**，最高優先級 6），確保音訊讀寫與重採樣絕不受 Core 0 網路傳輸阻塞。

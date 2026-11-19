@@ -243,8 +243,9 @@ static void task_audio_io(void *arg)
             for (size_t i = 0; i < AUDIO_CHUNK_FRAMES * 2U; i++) {
                 stereo_pcm[i] = (int16_t)(raw_i2s[i] >> 16);
             }
-            if (s_ctx.pcm_tap_cb != NULL) {
-                s_ctx.pcm_tap_cb(stereo_pcm, AUDIO_CHUNK_FRAMES);
+            audio_pcm_tap_cb_t tap_cb = s_ctx.pcm_tap_cb;
+            if (tap_cb != NULL) {
+                tap_cb(stereo_pcm, AUDIO_CHUNK_FRAMES);
             }
             process_dual_mic_vad(stereo_pcm, AUDIO_CHUNK_FRAMES);
         }
