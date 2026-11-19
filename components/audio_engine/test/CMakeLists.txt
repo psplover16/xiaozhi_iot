@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "test_audio_engine.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        unity
+        audio_engine
+        sd_media
+        board_bsp
+        esp_timer
+        esp_psram
+)

@@ -19,11 +19,16 @@
 #include "unity.h"
 #include "unity_test_runner.h"
 #include "board_bsp.h"
+#include "esp_rom_sys.h"
+
+/* 硬體未到貨前設為 1，直接進入 Unity 測試選單；實機部署時改回 0 */
+#define FORCE_UNITY_TEST_MENU 0
 
 static const char *TAG = "main";
 
 void app_main(void)
 {
+    esp_rom_printf("\r\n[BOOT_CHECK] Reached app_main!\r\n");
     ESP_LOGI(TAG, "=== Xiaozhi IoT Booting Up ===");
 
     // 1. 系統底層服務單次初始化（spec.md 1.2 規則 10 / plan.md 4.1）
@@ -52,8 +57,9 @@ void app_main(void)
     ESP_LOGI(TAG, "Checking mode button (GPIO 1) status (delay 300ms)...");
     vTaskDelay(pdMS_TO_TICKS(300));
 
-    if (board_btn_is_pressed()) {
-        ESP_LOGW(TAG, "Mode button held for >300ms: Entering Unity Test Menu...");
+    if (FORCE_UNITY_TEST_MENU || board_btn_is_pressed()) {
+        esp_rom_printf("[BOOT_CHECK] Launching Unity Test Menu...\r\n");
+        ESP_LOGW(TAG, "Entering Unity Test Menu...");
         unity_run_menu();
     } else {
         ESP_LOGI(TAG, "Mode button not pressed: Continuing normal startup...");

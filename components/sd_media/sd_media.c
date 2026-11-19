@@ -34,6 +34,8 @@ static const char *TAG = "sd_media";
 #define SD_AUDIO_CHUNK_BYTES    4096U
 #define SD_MUTEX_TIMEOUT_MS     1000U
 
+extern void __attribute__((weak)) audio_engine_apply_volume_pcm(int16_t *pcm, size_t sample_count);
+
 typedef struct __attribute__((packed)) {
     uint16_t magic;
     uint16_t record_count;
@@ -324,7 +326,9 @@ static esp_err_t play_wav_file(const char *filepath)
             }
             tx_bytes = mono_samples * 2U * sizeof(int16_t);
         }
-
+        if (audio_engine_apply_volume_pcm != NULL) {
+          audio_engine_apply_volume_pcm((int16_t *)io_buf, tx_bytes / sizeof(int16_t));
+        }
         size_t bytes_written = 0U;
         err = i2s_channel_write(tx_chan, io_buf, tx_bytes, &bytes_written, pdMS_TO_TICKS(500));
         if (err != ESP_OK) {
@@ -489,6 +493,9 @@ static esp_err_t play_mp3_file(const char *filepath)
         }
 
         size_t tx_bytes = (size_t)frames_read * 2U * sizeof(int16_t);
+        if (audio_engine_apply_volume_pcm != NULL) {
+          audio_engine_apply_volume_pcm(pcm_buf, tx_bytes / sizeof(int16_t));
+        }
         size_t bytes_written = 0U;
         err = i2s_channel_write(tx_chan, pcm_buf, tx_bytes, &bytes_written, pdMS_TO_TICKS(500));
         if (err != ESP_OK) {

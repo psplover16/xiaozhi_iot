@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "audio_engine.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        board_bsp
+        board_config
+        sd_media
+        freertos
+        esp_driver_i2s
+        esp_psram
+)
