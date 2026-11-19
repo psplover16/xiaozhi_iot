@@ -143,104 +143,96 @@
 
 ---
 
-## Phase 4：環境感測與精準校時（`env_sensors`）
+## Phase 4: 環境感測與時間基準 (`env_sensors` & `sensor_hub`)
 
-- [ ] **T-04-01：實作 DS3231 RTC 讀寫與 GY-30（BH1750）光照感測**
-  - **目標檔案**：`components/env_sensors/CMakeLists.txt`、`components/env_sensors/env_sensors.c`
-  - **實作規格**：
-    1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp esp_timer freertos`。
-    2. 實作 DS3231（I2C `0x68`）BCD 碼與 `struct tm` 雙向轉換，提供 `env_sensors_get_rtc_time()` 與 `env_sensors_set_rtc_time()`，系統開機時同步更新 ESP32 內部系統時鐘（`settimeofday()`）。
-    3. 實作 GY-30（I2C `0x23`）連續高解析度模式（指令 `0x10`）讀取，轉換為 `float lux` 照度值。
+- [x] **T-04-01**: 建立 `components/env_sensors/` 基礎架構與 I2C 感測器驅動
+  - 檔案：`components/env_sensors/CMakeLists.txt`、`components/env_sensors/env_sensors_drv.h`、`components/env_sensors/env_ds3231.c`、`components/env_sensors/env_gy30.c`
+  - 內容：實作 DS3231 (`0x68`) BCD 時間讀寫與 `settimeofday()` 系統時間同步；實作 GY-30/BH1750 (`0x23`) 連續高解析度光照度（Lux）讀取。
 
-- [ ] **T-04-02：實作 DHT22 微秒級單匯流排溫濕度驅動**
-  - **目標檔案**：`components/env_sensors/env_sensors.c`
-  - **實作規格**：
-    1. **嚴格使用 ESP-IDF v6.1.1 標頭檔 `#include "esp_rom_sys.h"`**（呼叫 `esp_rom_delay_us()`），禁止引用舊版 `ets_sys.h`。
-    2. 實作 DHT22（`GPIO 14`）40-bit 時序讀取：發送起始低電位 `1.2 ms` 後切換為上拉輸入，讀取前**使用 `portMUX_TYPE` 進入臨界區（`taskENTER_CRITICAL`）**防止 FreeRTOS 上下文切換干擾微秒脈寬量測，讀取完畢立即退出臨界區（總臨界時間小於 5ms）。
-    3. 驗證第 5 位元組校驗和（`(byte0 + byte1 + byte2 + byte3) & 0xFF == byte4`），若讀取失敗則保留上一次有效值並回傳錯誤碼，且限制最小讀取間隔為 `2000 ms`。
+- [x] **T-04-02**: 實作 DHT22 微秒級單匯流排溫濕度獨立驅動
+  - 檔案：`components/env_sensors/env_dht22.c`（同步更新 `env_sensors_drv.h` 與 `CMakeLists.txt`）
+  - 內容：使用 `GPIO 14` 開漏模式、`esp_rom_sys.h` 與 `portMUX_TYPE` 臨界區（硬上限 `< 5ms`）讀取 40-bit 溫濕度與 Checksum 校驗，失敗時回傳 `INVALID_TEMP_VALUE` / `INVALID_HUMI_VALUE`。
 
-- [ ] **T-04-03：實作感測器背景採集任務與 `env_sensors` 單元測試**
-  - **目標檔案**：`components/env_sensors/env_sensors.c`、`components/env_sensors/test/test_env_sensors.c`
-  - **實作規格**：
-    1. 建立背景採集任務 `task_sensor_poll`（**釘選於 Core 1**，優先級 3），每 `2 秒` 更新一次溫濕度與光照快取（受 Mutex 保護），供 `env_sensors_get_latest()` 零阻塞讀取；同時將溫濕度異常或定時紀錄推入 `psram_cache`。
-    2. 撰寫 `test_env_sensors.c` Unity 測試：驗證 DS3231 時間設定與讀回一致性、以及溫濕度數值落在物理合理範圍（`-40~80°C`、`0~100% RH`）。
+- [x] **T-04-03**: 實作 `sensor_hub` 整合層、Core 1 採集任務與 Phase 4 Unity 單元測試
+  - 檔案：`components/sensor_hub/CMakeLists.txt`、`components/sensor_hub/sensor_hub.c`（以及 Phase 4 Unity 測試檔）
+  - 內容：建立 `sensor_hub` 元件並依賴 `env_sensors`、`psram_cache`、`board_bsp`；實作 `sensor_hub_init`、`sensor_hub_start_task`（Pin to Core 1，每 2 秒輪詢三感測器、組裝 16B `sensor_record_t` 含 CRC16 並寫入 PSRAM 快取與觸發 Callback）、`sensor_hub_sync_ntp`（`esp_sntp.h` 校準 DS3231）、`sensor_hub_get_date_yyyymmdd`，並完成 Unity 單元測試。
+
+
 
 ---
 
-## Phase 2：AT24C256 離線黑盒子（`eeprom_blackbox`）
+## Phase 5：OLED 顯示與自適應調光（`oled_ui`）
 
-- [ ] **T-02-01：建立 `eeprom_blackbox` 建置檔與 2-Byte 位址 I2C 轉接層**
-  - **目標檔案**：`components/eeprom_blackbox/CMakeLists.txt`、`components/eeprom_blackbox/eeprom_blackbox.c`
+- [ ] **T-05-01：實作 SSD1306 128x64 Framebuffer 繪圖引擎與狀態列 UI**
+  - **目標檔案**：`components/oled_ui/CMakeLists.txt`、`components/oled_ui/oled_ui.c`
   - **實作規格**：
     1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp freertos`。
-    2. 實作內部預設 I/O 轉接函式 `default_eeprom_write(uint16_t mem_addr, const uint8_t *data, size_t len)` 與 `default_eeprom_read(...)`：將 16-bit 記憶體偏移量拆為高/低 2 位元組（`[mem_addr >> 8, mem_addr & 0xFF]`），寫入時拼裝 `[addr_hi, addr_lo, data...]` 後呼叫 `board_i2c_write(0x50, ...)`；讀取時先寫入 2-Byte 位址再呼叫 `board_i2c_read(0x50, ...)`。
-    3. 支援 `eeprom_blackbox_set_io_hooks()` 注入自訂 Mock 函式，以便無硬體環境下執行單元測試。
+    2. 在內部 SRAM 配置 `1024 Bytes`（`128 * 64 / 8`）顯示緩衝區，透過 `board_i2c_write(0x3C, ...)` 發送 SSD1306 初始化序列與整頁刷新指令（水平尋址模式），嚴禁在 I2C 傳輸期間持有畫面鎖（應先複製本地快照再透過 I2C 送出）。
+    3. 實作內建 `6x8` 與 `8x16` ASCII 點陣字型與基礎圖元繪製，規劃三段式版面：
+       - **頂部狀態列（Y=0~15）**：左側顯示網路連線狀態圖示（Wi-Fi 在線 / 離線降級 / AP 配網）、右側顯示待同步日誌筆數。
+       - **中央主視覺區（Y=16~47）**：大字體顯示 `HH:MM:SS` 時間或語音狀態表情/波形動畫（待機 / 聆聽中 / 思考中 / 播放中）。
+       - **底部資訊列（Y=48~63）**：顯示即時溫度（`°C`）、濕度（`%`）與照度（`lx`）。
 
-- [ ] **T-02-02：實作 64-Byte 頁邊界自動切割寫入與磨損均衡指標**
-  - **目標檔案**：`components/eeprom_blackbox/eeprom_blackbox.c`
+- [ ] **T-05-02：實作環境光自適應背光調光與 `oled_ui` 單元測試**
+  - **目標檔案**：`components/oled_ui/oled_ui.c`、`components/oled_ui/test/test_oled_ui.c`
   - **實作規格**：
-    1. **嚴格遵守硬體時序紅線**：任何跨越 `64-Byte` 頁邊界（`mem_addr % 64`）的寫入，必須自動拆分為多筆不跨頁的小寫入，且每筆 I2C 頁寫入完成後**強制呼叫 `vTaskDelay(pdMS_TO_TICKS(6))`**（大於 5ms 寫入週期），絕不允許跨頁回捲覆寫。
-    2. 將 `0x0000 ~ 0x003F`（前 64 Bytes）規劃為雙備份 Metadata 區塊（記錄 `write_head`、`read_tail`、`seq_num` 與 CRC16），每次寫入採 Ping-Pong 交替更新，實現磨損均衡並防止斷電損毀指標。
-    3. `0x0040 ~ 0x7FFF`（32,704 Bytes）作為環形日誌儲存區，實作 `eeprom_blackbox_append()`、`eeprom_blackbox_read_oldest()` 與 `eeprom_blackbox_pop_oldest()`。
-
-- [ ] **T-02-03：撰寫 `eeprom_blackbox` 跨頁與掉電一致性單元測試**
-  - **目標檔案**：`components/eeprom_blackbox/test/test_eeprom_blackbox.c`
-  - **實作規格**：
-    1. 使用 Mock 32KB 記憶體陣列並加入「頁回捲模擬器」（若單次寫入跨過 `64` 倍數邊界則故意模擬 AT24C256 頁首覆寫錯亂），驗證 `eeprom_blackbox_append()` 在任意偏移位址寫入跨頁資料時皆能 100% 完整讀回。
-    2. 驗證寫滿 32KB 環形折返覆寫最舊資料、以及重新呼叫 `eeprom_blackbox_init()` 後能正確從 Metadata 恢復斷電前的讀寫指標。
+    1. 建立 UI 刷新任務 `task_oled_refresh`（**釘選於 Core 1**，優先級 2，刷新率 `10 FPS` / 100ms 週期）。
+    2. 實作 `oled_ui_update_auto_brightness(float lux)` 平滑調光演算法（指數移動平均 EMA 濾波防閃爍）：環境光 `< 20 lux` 時背光 PWM 降至 `25`（夜間護眼模式）並同步降低 SSD1306 對比度暫存器（`0x81`）；`20 ~ 300 lux` 線性映射至 `50 ~ 180`；`> 300 lux` 設為 `255`。
+    3. 撰寫 `test_oled_ui.c` Unity 測試：驗證狀態切換 API 執行緒安全性，以及不同照度輸入下 PWM 輸出值符合單調遞增且不發生劇烈抖動。
 
 ---
 
-## Phase 3：SD 卡儲存與 WAV/MP3 播放（`sd_media`）
+## Phase 6：雙麥語音引擎與動態取樣率播放（`audio_engine`）
 
-- [ ] **T-03-01：建立 `sd_media` 建置檔與 FATFS 掛載管理**
-  - **目標檔案**：`components/sd_media/CMakeLists.txt`、`components/sd_media/sd_media.c`
+- [ ] **T-06-01：實作雙 INMP441 立體聲 I2S RX 錄音與簡單雙麥能量對比 VAD**
+  - **目標檔案**：`components/audio_engine/CMakeLists.txt`、`components/audio_engine/audio_engine.c`
   - **實作規格**：
-    1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp fatfs sdmmc`。
-    2. 使用 `esp_vfs_fat_sdspi_mount()` 掛載 SD 卡至 `/sdcard`（使用 `SPI2_HOST`、`SD_CS = GPIO 10`、`max_files = 5`、`allocation_unit_size = 16 * 1024`）。
-    3. 若開機時未插卡或掛載失敗，標記 `is_mounted = false` 並回傳錯誤碼，**嚴禁觸發 `ESP_ERROR_CHECK` 導致系統重啟**；實作 `sd_media_is_mounted()` 供降級策略查詢。
+    1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp sd_media freertos`。
+    2. 使用 ESP-IDF v6.1.1 新版 API `i2s_new_channel()` + `i2s_channel_init_std_mode()` 初始化 `I2S_NUM_0` 為 RX 標準模式（`16 kHz`、`32-bit` 槽寬、`I2S_SLOT_MODE_STEREO`，左聲道 L/R 接 GND、右聲道 L/R 接 3.3V），讀入後右移 16 位元轉為 16-bit PCM。
+    3. 實作雙麥能量計算與自適應噪聲底線語音活動偵測（VAD）：持續追蹤背景 RMS 能量，當前景人聲能量超過動態門檻且持續 `150 ms` 觸發 `AUDIO_EVENT_SPEECH_START`；靜音超過 `800 ms` 觸發 `AUDIO_EVENT_SPEECH_END`，將錄音 PCM 存入 PSRAM 語音緩衝區（上限 10 秒 / 320KB）。
 
-- [ ] **T-03-02：實作按日歸檔日誌寫入（`YYYYMMDD.bin`）與 CRC32 校驗**
-  - **目標檔案**：`components/sd_media/sd_media.c`
+- [ ] **T-06-02：實作 MAX98357A I2S TX 播放與動態取樣率重配置**
+  - **目標檔案**：`components/audio_engine/audio_engine.c`
   - **實作規格**：
-    1. 實作 `sd_media_append_logs()`：依據 `log_record_t` 的 Unix 時間戳轉換為 UTC+8 日期字串，開啟 `/sdcard/logs/YYYYMMDD.bin`（若目錄不存在則自動 `mkdir`）。
-    2. **防掉電資料遺失強制規範**：每筆寫入封裝為 `[Magic: 0xA55A (2B)][Length (2B)][Payload (N B)][CRC32 (4B)]`，開啟檔案一律使用附加模式 `"ab"`，寫入後**強制呼叫 `fflush(fp)` 與 `fsync(fileno(fp))`** 再 `fclose(fp)`。
-    3. 實作 `sd_media_read_unsynced()`：掃描目錄下最舊的未同步 `.bin` 檔，逐筆驗證 Magic 與 CRC32（遇損毀封包自動跳過並記錄警告），回傳有效紀錄供補傳模組使用。
+    1. 使用 `i2s_new_channel()` 初始化 `I2S_NUM_1` 為 TX 標準模式（`16-bit` 立體聲槽寬）。
+    2. **動態取樣率切換強制規範**：實作 `audio_engine_play_file(const char *filepath)`，先呼叫 `sd_media_open_audio()` 取得音訊檔真實取樣率（如 `16000 Hz`、`22050 Hz`、`44100 Hz` 或 `48000 Hz`），接著依序執行 **`i2s_channel_disable(tx_chan)` → `i2s_channel_reconfig_std_clock(tx_chan, &clk_cfg)` → `i2s_channel_enable(tx_chan)`**，防止播放不同取樣率的 MP3/WAV 時變調或破音。
+    3. 支援軟體數位音量縮放（`0~100%` 線性/對數增益）與 `audio_engine_stop_playback()` 隨時打斷播放（Barge-in 支援）。
 
-- [ ] **T-03-03：整合 `dr_mp3.h` 與 WAV 解析器實現統一 16-bit PCM 串流解碼**
-  - **目標檔案**：`components/sd_media/sd_media.c`
+- [ ] **T-06-03：撰寫 `audio_engine` 音訊管線與 I2S 時脈切換單元測試**
+  - **目標檔案**：`components/audio_engine/test/test_audio_engine.c`
   - **實作規格**：
-    1. 在 `sd_media.c` 頂部定義 `#define DR_MP3_IMPLEMENTATION` 與 `#define DR_MP3_NO_SIMD` 後 `#include "dr_mp3.h"`（使用 PSRAM 分配解碼器實例，避免佔用內部 SRAM）。
-    2. 實作 `sd_media_open_audio()`、`sd_media_read_pcm_frames()` 與 `sd_media_close_audio()`：
-       - 若副檔名為 `.wav`：解析 RIFF/fmt/data 標頭，取得取樣率與聲道數，直接讀取 16-bit PCM 樣本。
-       - 若副檔名為 `.mp3`：透過 `drmp3_init_file()` 初始化串流解碼器，每次呼叫 `drmp3_read_pcm_frames_s16()` 輸出標準 16-bit signed PCM 樣本，並支援單聲道自動複製為雙聲道交錯格式（L/R 相同），統一輸出規格給 I2S 播放。
-
-- [ ] **T-03-04：撰寫 `sd_media` 日誌寫入與音訊解碼單元測試**
-  - **目標檔案**：`components/sd_media/test/test_sd_media.c`
-  - **實作規格**：
-    1. 測試在無 SD 卡情況下呼叫 `sd_media_append_logs()` 能安全回傳 `ESP_ERR_INVALID_STATE` 且不崩潰。
-    2. 若測試環境有插 SD 卡（或掛載 SPIFFS/FatFS 測試分區），驗證寫入 10 筆日誌後讀回之 CRC32 100% 吻合，並測試開啟測試用 `.wav` / `.mp3` 檔能正確取得取樣率與非零 PCM 幀資料。
+    1. 建立 `task_audio_io`（**釘選於 Core 1**，最高優先級 6），確保音訊讀寫與重採樣絕不受 Core 0 網路傳輸阻塞。
+    2. 撰寫 `test_audio_engine.c` Unity 測試：驗證連續切換 `16000 Hz` 與 `44100 Hz` 取樣率時 `i2s_channel_reconfig_std_clock()` 回傳 `ESP_OK` 無記憶體洩漏，並測試播放過程中呼叫 `audio_engine_stop_playback()` 能在 `50 ms` 內乾淨停止。
 
 ---
 
-## Phase 4：環境感測與精準校時（`env_sensors`）
+## Phase 7：三態網路、按時間順序補傳與全系統總組裝（`net_manager` + `main`）
 
-- [ ] **T-04-01：實作 DS3231 RTC 讀寫與 GY-30（BH1750）光照感測**
-  - **目標檔案**：`components/env_sensors/CMakeLists.txt`、`components/env_sensors/env_sensors.c`
+- [ ] **T-07-01：實作三態網路狀態機（AP 配網 / STA 在線 / 離線降級）與 NVS 設定存取**
+  - **目標檔案**：`components/net_manager/CMakeLists.txt`、`components/net_manager/net_manager.c`
   - **實作規格**：
-    1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp esp_timer freertos`。
-    2. 實作 DS3231（I2C `0x68`）BCD 碼與 `struct tm` 雙向轉換，提供 `env_sensors_get_rtc_time()` 與 `env_sensors_set_rtc_time()`，系統開機時同步更新 ESP32 內部系統時鐘（`settimeofday()`）。
-    3. 實作 GY-30（I2C `0x23`）連續高解析度模式（指令 `0x10`）讀取，轉換為 `float lux` 照度值。
+    1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp psram_cache eeprom_blackbox sd_media esp_wifi esp_netif esp_event esp_http_server esp_http_client nvs_flash lwip`。
+    2. 從 NVS 讀取儲存的 Wi-Fi SSID/密碼與伺服器 URL；若 NVS 為空或開機按住模式鍵進入配網模式，啟動 SoftAP（SSID: `Xiaozhi-Setup`）與內建輕量 HTTP 設定網頁（可設定 Wi-Fi、Server URL 與時區）。
+    3. 若有 Wi-Fi 設定則啟動 STA 連線並開啟 `esp_sntp.h`（**嚴禁使用舊版 `sntp.h`**）校時，校時成功後自動寫回 DS3231 RTC；若連續重連失敗超過 3 次，自動切換至 `NET_STATE_OFFLINE` 離線降級模式（背景每 30 秒低功耗探測重連，絕不阻塞本機語音/感測/OLED）。
 
-- [ ] **T-04-02：實作 DHT22 微秒級單匯流排溫濕度驅動**
-  - **目標檔案**：`components/env_sensors/env_sensors.c`
+- [ ] **T-07-02：實作四級離線容災寫入管線與「按時間順序」斷網補傳引擎**
+  - **目標檔案**：`components/net_manager/net_manager.c`
   - **實作規格**：
-    1. **嚴格使用 ESP-IDF v6.1.1 標頭檔 `#include "esp_rom_sys.h"`**（呼叫 `esp_rom_delay_us()`），禁止引用舊版 `ets_sys.h`。
-    2. 實作 DHT22（`GPIO 14`）40-bit 時序讀取：發送起始低電位 `1.2 ms` 後切換為上拉輸入，讀取前**使用 `portMUX_TYPE` 進入臨界區（`taskENTER_CRITICAL`）**防止 FreeRTOS 上下文切換干擾微秒脈寬量測，讀取完畢立即退出臨界區（總臨界時間小於 5ms）。
-    3. 驗證第 5 位元組校驗和（`(byte0 + byte1 + byte2 + byte3) & 0xFF == byte4`），若讀取失敗則保留上一次有效值並回傳錯誤碼，且限制最小讀取間隔為 `2000 ms`。
+    1. **寫入管線**：背景任務定期從 `psram_cache_peek_batch()` 取出紀錄；若當前為 `NET_STATE_ONLINE` 則優先 HTTP POST 批次上傳伺服器（收到 HTTP 200 後呼叫 `psram_cache_commit_pop()`）；若離線或上傳失敗，則依序降級寫入 `sd_media_append_logs()`（SD 卡存在時）或 `eeprom_blackbox_append()`（SD 卡拔除或損壞時）。
+    2. **嚴格遵守「按時間順序補傳」紅線**：當偵測到網路從離線恢復為 `NET_STATE_ONLINE` 時，補傳引擎**必須嚴格依照資料產生的時間先後順序（Oldest First）**執行排空：
+       - **第一步**：先將 `eeprom_blackbox` 內殘留的最舊離線紀錄逐筆讀出並上傳至伺服器，確認 HTTP 200 後才呼叫 `eeprom_blackbox_pop_oldest()`（先清空最老的，再傳較新的）。
+       - **第二步**：接著掃描 SD 卡 `/sdcard/logs/` 下檔名日期最舊的未同步 `YYYYMMDD.bin` 檔案，逐批上傳並確認伺服器 ACK 後標記為已同步。
+       - **第三步**：最後才恢復 `psram_cache` 即時資料流上傳，確保伺服器端收到的時間序列 100% 連續且不亂序。
 
-- [ ] **T-04-03：實作感測器背景採集任務與 `env_sensors` 單元測試**
-  - **目標檔案**：`components/env_sensors/env_sensors.c`、`components/env_sensors/test/test_env_sensors.c`
+- [ ] **T-07-03：實作雲端語音對話上傳與 TTS 串流播放對接**
+  - **目標檔案**：`components/net_manager/net_manager.c`
   - **實作規格**：
-    1. 建立背景採集任務 `task_sensor_poll`（**釘選於 Core 1**，優先級 3），每 `2 秒` 更新一次溫濕度與光照快取（受 Mutex 保護），供 `env_sensors_get_latest()` 零阻塞讀取；同時將溫濕度異常或定時紀錄推入 `psram_cache`。
-    2. 撰寫 `test_env_sensors.c` Unity 測試：驗證 DS3231 時間設定與讀回一致性、以及溫濕度數值落在物理合理範圍（`-40~80°C`、`0~100% RH`）。
+    1. 當 Core 1 語音引擎觸發 `AUDIO_EVENT_SPEECH_END` 時，透過 FreeRTOS Queue 通知 Core 0 網路任務（**釘選於 Core 0**，優先級 4）。
+    2. 在線模式下透過 `esp_http_client` 將 PSRAM 錄音緩衝區上傳至後端語音介面，接收回傳的回覆音訊（儲存至 PSRAM 暫存檔或 `/sdcard/cache/reply.mp3`）後，通知 `audio_engine_play_file()` 播報；離線模式下則直接播放本機 SD 卡預設離線提示音（如 `/sdcard/audio/offline_hint.mp3`）。
+
+- [ ] **T-07-04：全系統雙核心總組裝（`main.c`）與整合驗證**
+  - **目標檔案**：`main/CMakeLists.txt`、`main/main.c`
+  - **實作規格**：
+    1. `main/CMakeLists.txt` 依 `plan.md` 第 2.3 節列入全部 8 個專案元件與 `unity`、`nvs_flash`。
+    2. 在 `main/main.c` 依序完成：NVS 初始化 → `board_bsp_init()` → 300ms 開機按鍵檢查（長按進 `unity_run_menu()`）→ `psram_cache_init()` → `eeprom_blackbox_init()` → `sd_media_init()` → `env_sensors_init()` → `oled_ui_init()` → `audio_engine_init()` → `net_manager_init()`。
+    3. 確認所有背景任務嚴格落實雙核心隔離（**Core 0**：Wi-Fi / HTTP / SNTP / 離線補傳；**Core 1**：I2S 雙麥錄音與播放 / DHT22 與 I2C 感測 / OLED 刷新），執行完整 `idf.py build` 零警告通過，並印出開機可用內部 SRAM 與 PSRAM 剩餘容量報告。

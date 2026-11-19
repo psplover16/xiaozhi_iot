@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "env_ds3231.c"
+        "env_gy30.c"
+        "env_dht22.c"
+    INCLUDE_DIRS
+        "include"
+        "."
+    REQUIRES
+        board_bsp
+        board_config
+        esp_driver_gpio
+        esp_timer
+)

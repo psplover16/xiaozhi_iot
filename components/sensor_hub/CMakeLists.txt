@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "sensor_hub.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        env_sensors
+        board_bsp
+        board_config
+        lwip
+)

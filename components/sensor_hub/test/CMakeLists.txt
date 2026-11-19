@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "test_sensor_hub.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        unity
+        sensor_hub
+        env_sensors
+        board_bsp
+        board_config
+)
