@@ -40,3 +40,7 @@
 
 
 我剛切換模型接手開發，請先閱讀 spec.md、plan.md、tasks.md 以及已完成的 components/board_bsp/ 對齊程式碼風格，然後嚴格依照規則只實作 T-01-01，完成後執行 idf.py build 驗證並將 tasks.md 對應項目打勾後停止。
+
+
+開啟終端機
+ESP-IDF: Open ESP-IDF Terminal

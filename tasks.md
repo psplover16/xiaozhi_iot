@@ -72,14 +72,14 @@
 
 ## Phase 1：PSRAM 環形快取層（`psram_cache`）
 
-- [ ] **T-01-01：實作 512KB PSRAM 環形緩衝區與執行緒安全寫入**
+- [x] **T-01-01：實作 512KB PSRAM 環形緩衝區與執行緒安全寫入**
   - **目標檔案**：`components/psram_cache/CMakeLists.txt`、`components/psram_cache/psram_cache.c`
   - **實作規格**：
     1. `CMakeLists.txt` 設定 `REQUIRES freertos esp_psram`。
     2. 使用 `heap_caps_malloc(512 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` 分配 512KB 環形緩衝區（若分配失敗回傳 `ESP_ERR_NO_MEM`）。
     3. 實作 `psram_cache_push()`：以 `SemaphoreHandle_t` 保護頭尾指標，將 `log_record_t` 寫入環形佇列；當緩衝區剩餘空間不足時，覆寫最舊資料並遞增溢出計數器，絕不阻塞呼叫端。
 
-- [ ] **T-01-02：實作批次讀取、確認提交與 `psram_cache` 單元測試**
+- [x] **T-01-02：實作批次讀取、確認提交與 `psram_cache` 單元測試**
   - **目標檔案**：`components/psram_cache/psram_cache.c`、`components/psram_cache/test/test_psram_cache.c`
   - **實作規格**：
     1. 實作 `psram_cache_peek_batch()`（只讀取不移動讀指標，支援跨環形陣列尾端折返）與 `psram_cache_commit_pop()`（確認下層寫入成功後才移動讀指標釋放空間）。
@@ -89,21 +89,21 @@
 
 ## Phase 2：AT24C256 離線黑盒子（`eeprom_blackbox`）
 
-- [ ] **T-02-01：建立 `eeprom_blackbox` 建置檔與 2-Byte 位址 I2C 轉接層**
+- [x] **T-02-01：建立 `eeprom_blackbox` 建置檔與 2-Byte 位址 I2C 轉接層**
   - **目標檔案**：`components/eeprom_blackbox/CMakeLists.txt`、`components/eeprom_blackbox/eeprom_blackbox.c`
   - **實作規格**：
     1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp freertos`。
     2. 實作內部預設 I/O 轉接函式 `default_eeprom_write(uint16_t mem_addr, const uint8_t *data, size_t len)` 與 `default_eeprom_read(...)`：將 16-bit 記憶體偏移量拆為高/低 2 位元組（`[mem_addr >> 8, mem_addr & 0xFF]`），寫入時拼裝 `[addr_hi, addr_lo, data...]` 後呼叫 `board_i2c_write(0x50, ...)`；讀取時先寫入 2-Byte 位址再呼叫 `board_i2c_read(0x50, ...)`。
     3. 支援 `eeprom_blackbox_set_io_hooks()` 注入自訂 Mock 函式，以便無硬體環境下執行單元測試。
 
-- [ ] **T-02-02：實作 64-Byte 頁邊界自動切割寫入與磨損均衡指標**
+- [x] **T-02-02：實作 64-Byte 頁邊界自動切割寫入與磨損均衡指標**
   - **目標檔案**：`components/eeprom_blackbox/eeprom_blackbox.c`
   - **實作規格**：
     1. **嚴格遵守硬體時序紅線**：任何跨越 `64-Byte` 頁邊界（`mem_addr % 64`）的寫入，必須自動拆分為多筆不跨頁的小寫入，且每筆 I2C 頁寫入完成後**強制呼叫 `vTaskDelay(pdMS_TO_TICKS(6))`**（大於 5ms 寫入週期），絕不允許跨頁回捲覆寫。
     2. 將 `0x0000 ~ 0x003F`（前 64 Bytes）規劃為雙備份 Metadata 區塊（記錄 `write_head`、`read_tail`、`seq_num` 與 CRC16），每次寫入採 Ping-Pong 交替更新，實現磨損均衡並防止斷電損毀指標。
     3. `0x0040 ~ 0x7FFF`（32,704 Bytes）作為環形日誌儲存區，實作 `eeprom_blackbox_append()`、`eeprom_blackbox_read_oldest()` 與 `eeprom_blackbox_pop_oldest()`。
 
-- [ ] **T-02-03：撰寫 `eeprom_blackbox` 跨頁與掉電一致性單元測試**
+- [x] **T-02-03：撰寫 `eeprom_blackbox` 跨頁與掉電一致性單元測試**
   - **目標檔案**：`components/eeprom_blackbox/test/test_eeprom_blackbox.c`
   - **實作規格**：
     1. 使用 Mock 32KB 記憶體陣列並加入「頁回捲模擬器」（若單次寫入跨過 `64` 倍數邊界則故意模擬 AT24C256 頁首覆寫錯亂），驗證 `eeprom_blackbox_append()` 在任意偏移位址寫入跨頁資料時皆能 100% 完整讀回。
@@ -113,21 +113,21 @@
 
 ## Phase 3：SD 卡儲存與 WAV/MP3 播放（`sd_media`）
 
-- [ ] **T-03-01：建立 `sd_media` 建置檔與 FATFS 掛載管理**
+- [x] **T-03-01：建立 `sd_media` 建置檔與 FATFS 掛載管理**
   - **目標檔案**：`components/sd_media/CMakeLists.txt`、`components/sd_media/sd_media.c`
   - **實作規格**：
     1. `CMakeLists.txt` 依 `plan.md` 設定：`REQUIRES board_bsp fatfs sdmmc`。
     2. 使用 `esp_vfs_fat_sdspi_mount()` 掛載 SD 卡至 `/sdcard`（使用 `SPI2_HOST`、`SD_CS = GPIO 10`、`max_files = 5`、`allocation_unit_size = 16 * 1024`）。
     3. 若開機時未插卡或掛載失敗，標記 `is_mounted = false` 並回傳錯誤碼，**嚴禁觸發 `ESP_ERROR_CHECK` 導致系統重啟**；實作 `sd_media_is_mounted()` 供降級策略查詢。
 
-- [ ] **T-03-02：實作按日歸檔日誌寫入（`YYYYMMDD.bin`）與 CRC32 校驗**
+- [x] **T-03-02：實作按日歸檔日誌寫入（`YYYYMMDD.bin`）與 CRC32 校驗**
   - **目標檔案**：`components/sd_media/sd_media.c`
   - **實作規格**：
     1. 實作 `sd_media_append_logs()`：依據 `log_record_t` 的 Unix 時間戳轉換為 UTC+8 日期字串，開啟 `/sdcard/logs/YYYYMMDD.bin`（若目錄不存在則自動 `mkdir`）。
     2. **防掉電資料遺失強制規範**：每筆寫入封裝為 `[Magic: 0xA55A (2B)][Length (2B)][Payload (N B)][CRC32 (4B)]`，開啟檔案一律使用附加模式 `"ab"`，寫入後**強制呼叫 `fflush(fp)` 與 `fsync(fileno(fp))`** 再 `fclose(fp)`。
     3. 實作 `sd_media_read_unsynced()`：掃描目錄下最舊的未同步 `.bin` 檔，逐筆驗證 Magic 與 CRC32（遇損毀封包自動跳過並記錄警告），回傳有效紀錄供補傳模組使用。
 
-- [ ] **T-03-03：整合 `dr_mp3.h` 與 WAV 解析器實現統一 16-bit PCM 串流解碼**
+- [x] **T-03-03：整合 `dr_mp3.h` 與 WAV 解析器實現統一 16-bit PCM 串流解碼**
   - **目標檔案**：`components/sd_media/sd_media.c`
   - **實作規格**：
     1. 在 `sd_media.c` 頂部定義 `#define DR_MP3_IMPLEMENTATION` 與 `#define DR_MP3_NO_SIMD` 後 `#include "dr_mp3.h"`（使用 PSRAM 分配解碼器實例，避免佔用內部 SRAM）。
@@ -135,7 +135,7 @@
        - 若副檔名為 `.wav`：解析 RIFF/fmt/data 標頭，取得取樣率與聲道數，直接讀取 16-bit PCM 樣本。
        - 若副檔名為 `.mp3`：透過 `drmp3_init_file()` 初始化串流解碼器，每次呼叫 `drmp3_read_pcm_frames_s16()` 輸出標準 16-bit signed PCM 樣本，並支援單聲道自動複製為雙聲道交錯格式（L/R 相同），統一輸出規格給 I2S 播放。
 
-- [ ] **T-03-04：撰寫 `sd_media` 日誌寫入與音訊解碼單元測試**
+- [x] **T-03-04：撰寫 `sd_media` 日誌寫入與音訊解碼單元測試**
   - **目標檔案**：`components/sd_media/test/test_sd_media.c`
   - **實作規格**：
     1. 測試在無 SD 卡情況下呼叫 `sd_media_append_logs()` 能安全回傳 `ESP_ERR_INVALID_STATE` 且不崩潰。
