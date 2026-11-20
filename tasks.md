@@ -242,14 +242,14 @@
 
 ## Phase 8：無新增硬體之離線語音喚醒與命令識別（`ESP-SR` 擴充）
 
-- [ ] **T-08-01：配置 `3MB` `model` 分區與 `espressif/esp-sr` 元件依賴**
+- [x] **T-08-01：配置 `3MB` `model` 分區與 `espressif/esp-sr` 元件依賴**
   - **目標檔案**：`partitions.csv`、`components/audio_engine/idf_component.yml`、`components/audio_engine/include/sr_engine.h`、`components/audio_engine/CMakeLists.txt`
   - **實作規格**：
     1. 修改 `partitions.csv`：保留既有的 `nvs`、`phy_init`、`factory`（`0x400000`）分區偏移與大小完全不變，於 `0x410000` 處新增 `model, data, spiffs, 0x410000, 0x300000,`（`3MB`）與 `coredump, data, coredump, 0x710000, 0x10000,`。
     2. 建立 `components/audio_engine/idf_component.yml`，宣告 `dependencies: { espressif/esp-sr: "^1.9.0" }`（或相容 ESP-IDF v6.1.1 之最新穩定版），並建立符合 `plan.md` 第 3.6 節簽章之 `sr_engine.h`。
     3. 更新 `components/audio_engine/CMakeLists.txt`，將 `espressif__esp-sr` 加入 `REQUIRES`（先行建立空骨架實作或分階段編譯），執行 `idf.py reconfigure` 與 `idf.py build` 確認官方 `esp-sr` 模型正確打包進 `model` 分區且 PSRAM 配置無誤。
 
-- [ ] **T-08-02：實作 `ESP-AFE` 雙麥降噪與 WakeNet / MultiNet 雙階段狀態機（`sr_engine.c`）**
+- [x] **T-08-02：實作 `ESP-AFE` 雙麥降噪與 WakeNet / MultiNet 雙階段狀態機（`sr_engine.c`）**
   - **目標檔案**：`components/audio_engine/sr_engine.c`、`components/audio_engine/CMakeLists.txt`
   - **實作規格**：
     1. 實作 `sr_engine_init()`：透過 `esp_srmodel_init("model")` 載入模型，初始化 `ESP-AFE`（`AFE_TYPE_SR`，`total_ch_num = 2, mic_num = 2`，利用雙 INMP441 進行波束成形與降噪）、`WakeNet`（預設喚醒詞）與 `MultiNet`（中文命令詞模型），所有模型權重與環形緩衝配置於 8MB Octal PSRAM（`MALLOC_CAP_SPIRAM`）。

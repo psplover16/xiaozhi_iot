@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "audio_engine.c"
+        "sr_engine.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -10,4 +11,8 @@ idf_component_register(
         freertos
         esp_driver_i2s
         esp_psram
+        espressif__esp-sr
+    PRIV_REQUIRES
+        esp_ringbuf
+        esp_timer
 )
