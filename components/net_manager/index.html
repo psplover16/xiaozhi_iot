@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Xiaozhi IoT 控制台</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#f1f5f9; --sub:#94a3b8; --pri:#38bdf8; --ok:#22c55e; --err:#ef4444; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding:16px; line-height:1.5; }
+  .wrap { max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; }
+  .hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+  h1 { font-size:1.25rem; color:var(--pri); }
+  h2 { font-size:1rem; color:var(--text); }
+  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  .stat { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
+  .stat .k { font-size:.75rem; color:var(--sub); }
+  .stat .v { font-size:.95rem; font-weight:600; margin-top:2px; word-break:break-all; }
+  .field { margin-bottom:12px; }
+  label { display:block; font-size:.85rem; color:var(--sub); margin-bottom:4px; }
+  input { width:100%; padding:9px 11px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.95rem; }
+  input:focus { outline:none; border-color:var(--pri); }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .btn { width:100%; padding:11px; border:none; border-radius:8px; background:var(--pri); color:#0f172a; font-weight:700; font-size:.95rem; cursor:pointer; }
+  .btn:active { opacity:.85; }
+  .btn-sm { padding:5px 10px; font-size:.8rem; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); cursor:pointer; }
+  .msg { display:none; padding:10px 12px; border-radius:8px; font-size:.88rem; margin-bottom:12px; }
+  .msg.ok { display:block; background:rgba(34,197,94,.15); border:1px solid var(--ok); color:#86efac; }
+  .msg.err { display:block; background:rgba(239,68,68,.15); border:1px solid var(--err); color:#fca5a5; }
+  @media(max-width:480px){ .grid,.row2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="hdr">
+      <h1>Xiaozhi IoT 系統狀態</h1>
+      <button type="button" class="btn-sm" onclick="loadStatus()">重新整理</button>
+    </div>
+    <div class="grid">
+      <div class="stat"><div class="k">運作模式</div><div class="v" id="st_mode">讀取中...</div></div>
+      <div class="stat"><div class="k">設定 Wi-Fi</div><div class="v" id="st_ssid">--</div></div>
+      <div class="stat"><div class="k">EEPROM 離線暫存</div><div class="v" id="st_eeprom">--</div></div>
+      <div class="stat"><div class="k">SD 卡儲存狀態</div><div class="v" id="st_sd">--</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr"><h2>網路與系統參數設定</h2></div>
+    <div id="msg" class="msg"></div>
+    <form id="cfgForm" method="POST" action="/save">
+      <div class="field">
+        <label for="wifi_ssid">Wi-Fi SSID（最多 31 字元）</label>
+        <input id="wifi_ssid" name="wifi_ssid" maxlength="31" placeholder="輸入路由器名稱">
+      </div>
+      <div class="field">
+        <label for="wifi_pass">Wi-Fi 密碼（8~63 字元，留空則不修改）</label>
+        <input id="wifi_pass" type="password" name="wifi_pass" maxlength="63" placeholder="留空維持原密碼">
+      </div>
+      <div class="field">
+        <label for="server_url">雲端伺服器 URL（http/https/ws/wss）</label>
+        <input id="server_url" name="server_url" maxlength="127" placeholder="http://192.168.1.100:8080">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="sample_interval_sec">採樣週期（5~3600 秒）</label>
+          <input id="sample_interval_sec" type="number" name="sample_interval_sec" min="5" max="3600" required>
+        </div>
+        <div class="field">
+          <label for="psram_window_hours">PSRAM 統計視窗（1~24 小時）</label>
+          <input id="psram_window_hours" type="number" name="psram_window_hours" min="1" max="24" required>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="eeprom_warn_pct">EEPROM 警告門檻（50~95 %）</label>
+          <input id="eeprom_warn_pct" type="number" name="eeprom_warn_pct" min="50" max="95" required>
+        </div>
+        <div class="field">
+          <label for="sd_warn_free_mb">SD 卡剩餘警告（50~1000 MB）</label>
+          <input id="sd_warn_free_mb" type="number" name="sd_warn_free_mb" min="50" max="1000" required>
+        </div>
+      </div>
+      <button type="submit" class="btn">儲存設定至 NVS</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const MODE_NAMES = ['離線模式 (OFFLINE)', '在線模式 (ONLINE)', '網頁設定 (WEB_CFG)'];
+
+function showMsg(ok, text) {
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/config');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('wifi_ssid').value = d.wifi_ssid || '';
+    document.getElementById('wifi_pass').placeholder = d.has_pass ? '已設定密碼（留空則不修改）' : '開放網路或輸入 8~63 字元密碼';
+    document.getElementById('server_url').value = d.server_url || '';
+    document.getElementById('sample_interval_sec').value = d.sample_interval_sec;
+    document.getElementById('psram_window_hours').value = d.psram_window_hours;
+    document.getElementById('eeprom_warn_pct').value = d.eeprom_warn_pct;
+    document.getElementById('sd_warn_free_mb').value = d.sd_warn_free_mb;
+  } catch (e) {}
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/status');
+    if (!r.ok) return;
+    const s = await r.json();
+    document.getElementById('st_mode').textContent = MODE_NAMES[s.mode] || ('模式 ' + s.mode);
+    document.getElementById('st_ssid').textContent = s.wifi_ssid || '(未設定)';
+    document.getElementById('st_eeprom').textContent = s.eeprom_records + ' 筆';
+    document.getElementById('st_sd').textContent = s.sd_mounted ? ('已掛載 / 剩餘 ' + s.sd_free_mb + ' MB') : '未掛載';
+  } catch (e) {}
+}
+
+document.getElementById('cfgForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const body = new URLSearchParams(new FormData(ev.target));
+  try {
+    const r = await fetch('/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+    const txt = await r.text();
+    if (r.ok) {
+      showMsg(true, '設定已成功寫入 NVS！');
+      document.getElementById('wifi_pass').value = '';
+      loadConfig();
+      loadStatus();
+    } else {
+      showMsg(false, '儲存失敗：' + txt);
+    }
+  } catch (e) {
+    showMsg(false, '網路連線中斷，請確認裝置熱點狀態');
+  }
+});
+
+loadConfig();
+loadStatus();
+setInterval(loadStatus, 3000);
+</script>
+</body>
+</html>

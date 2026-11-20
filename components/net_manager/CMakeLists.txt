@@ -6,6 +6,8 @@ idf_component_register(
         "voice_cloud.c"
     INCLUDE_DIRS
         "include"
+    EMBED_TXTFILES
+        "index.html"
     REQUIRES
         board_bsp
         esp_wifi

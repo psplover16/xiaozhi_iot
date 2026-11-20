@@ -9,7 +9,6 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 
 static const char *TAG = "web_config";
@@ -17,8 +16,10 @@ static const char *TAG = "web_config";
 #define SOFTAP_DEFAULT_SSID     "Xiaozhi_Setup"
 #define SOFTAP_DEFAULT_PASS     "12345678"
 #define STA_CFG_TIMEOUT_MS      10000U
-#define HTML_PSRAM_BUF_SIZE     4096U
 #define POST_MAX_BODY_LEN       1024U
+
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
 
 static httpd_handle_t s_httpd = NULL;
 
@@ -37,6 +38,21 @@ static void set_err(char *err_msg, size_t err_len, const char *msg)
         strncpy(err_msg, msg, err_len - 1U);
         err_msg[err_len - 1U] = '\0';
     }
+}
+
+static void json_escape(char *dst, size_t dst_len, const char *src)
+{
+    size_t di = 0;
+    for (size_t si = 0; src[si] != '\0' && (di + 2U) < dst_len; si++) {
+        unsigned char c = (unsigned char)src[si];
+        if (c == '"' || c == '\\') {
+            dst[di++] = '\\';
+            dst[di++] = (char)c;
+        } else if (c >= 0x20U) {
+            dst[di++] = (char)c;
+        }
+    }
+    dst[di] = '\0';
 }
 
 esp_err_t web_config_validate(const sys_config_t *cfg, char *err_msg, size_t err_len)
@@ -135,45 +151,34 @@ static bool extract_form_field(const char *body, const char *key,
 
 static esp_err_t http_get_root_handler(httpd_req_t *req)
 {
-    char *html = (char *)heap_caps_malloc(HTML_PSRAM_BUF_SIZE,
-                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (html == NULL) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "PSRAM OOM");
-        return ESP_FAIL;
+    size_t html_len = (size_t)(index_html_end - index_html_start);
+    if (html_len > 0U && index_html_start[html_len - 1U] == '\0') {
+        html_len--;
     }
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    return httpd_resp_send(req, (const char *)index_html_start, (ssize_t)html_len);
+}
 
+static esp_err_t http_get_config_handler(httpd_req_t *req)
+{
     sys_config_t cfg;
     net_mgr_get_config_copy(&cfg);
 
-    snprintf(html, HTML_PSRAM_BUF_SIZE,
-             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-             "<title>Xiaozhi IoT Setup</title></head><body>"
-             "<h2>Xiaozhi IoT 系統設定</h2>"
-             "<form method='POST' action='/save'>"
-             "Wi-Fi SSID:<br><input name='wifi_ssid' maxlength='31' value='%s'><br><br>"
-             "Wi-Fi 密碼:<br><input type='password' name='wifi_pass' maxlength='63' "
-             "placeholder='留空則不修改原密碼'><br><br>"
-             "Server URL:<br><input name='server_url' maxlength='127' value='%s'><br><br>"
-             "採樣週期 (5~3600秒):<br><input type='number' name='sample_interval_sec' "
-             "min='5' max='3600' value='%u'><br><br>"
-             "PSRAM 統計視窗 (1~24小時):<br><input type='number' name='psram_window_hours' "
-             "min='1' max='24' value='%u'><br><br>"
-             "EEPROM 警告門檻 (50~95%%):<br><input type='number' name='eeprom_warn_pct' "
-             "min='50' max='95' value='%u'><br><br>"
-             "SD 卡剩餘警告 (50~1000MB):<br><input type='number' name='sd_warn_free_mb' "
-             "min='50' max='1000' value='%u'><br><br>"
-             "<button type='submit'>儲存設定</button></form></body></html>",
-             cfg.wifi_ssid, cfg.server_url,
-             (unsigned)cfg.sample_interval_sec,
-             (unsigned)cfg.psram_window_hours,
-             (unsigned)cfg.eeprom_warn_pct,
-             (unsigned)cfg.sd_warn_free_mb);
+    char esc_ssid[64], esc_url[256], json[512];
+    json_escape(esc_ssid, sizeof(esc_ssid), cfg.wifi_ssid);
+    json_escape(esc_url, sizeof(esc_url), cfg.server_url);
 
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    esp_err_t res = httpd_resp_send(req, html, HTTPD_RESP_USE_STRLEN);
-    heap_caps_free(html);
-    return res;
+    snprintf(json, sizeof(json),
+             "{\"wifi_ssid\":\"%s\",\"has_pass\":%s,\"server_url\":\"%s\","
+             "\"sample_interval_sec\":%u,\"psram_window_hours\":%u,"
+             "\"eeprom_warn_pct\":%u,\"sd_warn_free_mb\":%u}",
+             esc_ssid, (cfg.wifi_pass[0] != '\0') ? "true" : "false", esc_url,
+             (unsigned)cfg.sample_interval_sec, (unsigned)cfg.psram_window_hours,
+             (unsigned)cfg.eeprom_warn_pct, (unsigned)cfg.sd_warn_free_mb);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t http_post_save_handler(httpd_req_t *req)
@@ -186,8 +191,7 @@ static esp_err_t http_post_save_handler(httpd_req_t *req)
     char body[POST_MAX_BODY_LEN + 1U];
     size_t received = 0;
     while (received < (size_t)req->content_len) {
-        int r = httpd_req_recv(req, body + received,
-                               (size_t)req->content_len - received);
+        int r = httpd_req_recv(req, body + received, (size_t)req->content_len - received);
         if (r <= 0) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Receive failed");
             return ESP_FAIL;
@@ -227,18 +231,17 @@ static esp_err_t http_post_save_handler(httpd_req_t *req)
 
     char err_msg[96];
     if (web_config_validate(&candidate, err_msg, sizeof(err_msg)) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err_msg);
-        return ESP_FAIL;
+        httpd_resp_set_status(req, HTTPD_400);
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        return httpd_resp_send(req, err_msg, HTTPD_RESP_USE_STRLEN);
     }
-
     if (net_mgr_save_config(&candidate) != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS save failed");
         return ESP_FAIL;
     }
 
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, "<h3>設定已儲存成功！</h3><a href='/'>返回</a>",
-                           HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(req, "設定已儲存成功！<a href='/'>返回</a>", HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t http_get_status_handler(httpd_req_t *req)
@@ -251,11 +254,13 @@ static esp_err_t http_get_status_handler(httpd_req_t *req)
     uint32_t sd_free_mb = 0;
     net_mgr_query_storage_status(&eeprom_cnt, &sd_mounted, &sd_free_mb);
 
-    char json[320];
+    char esc_ssid[64], json[360];
+    json_escape(esc_ssid, sizeof(esc_ssid), cfg.wifi_ssid);
+
     snprintf(json, sizeof(json),
              "{\"mode\":%d,\"wifi_ssid\":\"%s\",\"sample_interval_sec\":%u,"
              "\"eeprom_records\":%u,\"sd_mounted\":%s,\"sd_free_mb\":%lu}",
-             (int)net_manager_get_mode(), cfg.wifi_ssid,
+             (int)net_manager_get_mode(), esc_ssid,
              (unsigned)cfg.sample_interval_sec, (unsigned)eeprom_cnt,
              sd_mounted ? "true" : "false", (unsigned long)sd_free_mb);
 
@@ -340,13 +345,15 @@ esp_err_t web_config_start(const sys_config_t *cfg)
         return err;
     }
 
-    const httpd_uri_t uri_root   = { .uri = "/",       .method = HTTP_GET,  .handler = http_get_root_handler };
-    const httpd_uri_t uri_save   = { .uri = "/save",   .method = HTTP_POST, .handler = http_post_save_handler };
-    const httpd_uri_t uri_status = { .uri = "/status", .method = HTTP_GET,  .handler = http_get_status_handler };
-
-    (void)httpd_register_uri_handler(s_httpd, &uri_root);
-    (void)httpd_register_uri_handler(s_httpd, &uri_save);
-    (void)httpd_register_uri_handler(s_httpd, &uri_status);
+    const httpd_uri_t uris[] = {
+        { .uri = "/",       .method = HTTP_GET,  .handler = http_get_root_handler },
+        { .uri = "/config", .method = HTTP_GET,  .handler = http_get_config_handler },
+        { .uri = "/save",   .method = HTTP_POST, .handler = http_post_save_handler },
+        { .uri = "/status", .method = HTTP_GET,  .handler = http_get_status_handler },
+    };
+    for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
+        (void)httpd_register_uri_handler(s_httpd, &uris[i]);
+    }
     return ESP_OK;
 }
 
