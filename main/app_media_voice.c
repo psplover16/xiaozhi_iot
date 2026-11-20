@@ -1,5 +1,5 @@
 #include "app_bridges.h"
-
+#include "sr_engine.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -169,6 +169,7 @@ void app_voice_on_command(voice_cmd_id_t cmd)
             ESP_LOGI(TAG, "目前本地時間: %04d-%02d-%02d %02d:%02d:%02d",
                      tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
                      tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+            (void)sr_dispatcher_speak_time((uint8_t)tm_info.tm_hour, (uint8_t)tm_info.tm_min);
             break;
         }
 

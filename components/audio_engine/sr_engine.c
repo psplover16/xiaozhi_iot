@@ -39,19 +39,26 @@ typedef struct {
     const char    *pinyin;
 } default_pinyin_cmd_t;
 
+/* 18 條標準漢語拼音離線命令詞表 */
 static const default_pinyin_cmd_t s_default_cmds[] = {
-    { VOICE_CMD_WIFI_ON,    "da kai wang luo"       },
-    { VOICE_CMD_WIFI_OFF,   "guan bi wang luo"      },
-    { VOICE_CMD_REPORT_ENV, "bo bao huan jing"      },
-    { VOICE_CMD_REPORT_ENV, "wen shi du duo shao"   },
-    { VOICE_CMD_PLAY_MUSIC, "bo fang yin yue"       },
-    { VOICE_CMD_STOP_MUSIC, "ting zhi bo fang"      },
-    { VOICE_CMD_TIME_NOW,   "xian zai ji dian"      },
-    { VOICE_CMD_VOL_UP,     "sheng yin da yi dian"  },
+    { VOICE_CMD_WIFI_ON,    "da kai wang luo"        },
+    { VOICE_CMD_WIFI_ON,    "da kai wu xian wang"    },
+    { VOICE_CMD_WIFI_OFF,   "guan bi wang luo"       },
+    { VOICE_CMD_WIFI_OFF,   "duan kai wang luo"      },
+    { VOICE_CMD_AP_MODE,    "da kai pei wang"        },
+    { VOICE_CMD_AP_MODE,    "jin ru pei wang mo shi" },
+    { VOICE_CMD_STA_MODE,   "lian jie wang luo"      },
+    { VOICE_CMD_REPORT_ENV, "bo bao huan jing"       },
+    { VOICE_CMD_REPORT_ENV, "wen shi du duo shao"    },
+    { VOICE_CMD_REPORT_ENV, "dang qian wen du"       },
+    { VOICE_CMD_REPORT_ENV, "guang zhao duo shao"    },
+    { VOICE_CMD_TIME_NOW,   "xian zai ji dian"       },
+    { VOICE_CMD_TIME_NOW,   "bao shi"                },
+    { VOICE_CMD_PLAY_MUSIC, "bo fang yin yue"        },
+    { VOICE_CMD_STOP_MUSIC, "ting zhi bo fang"       },
+    { VOICE_CMD_VOL_UP,     "sheng yin da yi dian"   },
     { VOICE_CMD_VOL_DOWN,   "sheng yin xiao yi dian" },
-    { VOICE_CMD_MUTE,       "jing yin"              },
-    { VOICE_CMD_AP_MODE,    "da kai pei wang"       },
-    { VOICE_CMD_STA_MODE,   "lian jie wang luo"     },
+    { VOICE_CMD_MUTE,       "jing yin"               },
 };
 
 static srmodel_list_t            *s_models        = NULL;
@@ -140,7 +147,7 @@ esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state
     char *wn_name = esp_srmodel_filter(s_models, ESP_WN_PREFIX, NULL);
     char *mn_name = esp_srmodel_filter(s_models, ESP_MN_PREFIX, ESP_MN_CHINESE);
     if (wn_name == NULL || mn_name == NULL) {
-        ESP_LOGE(TAG, "模型缺失 (WakeNet=%s, MultiNet=%s)，請檢查 menuconfig",
+        ESP_LOGE(TAG, "模型缺失 (WakeNet=%s, MultiNet=%s)",
                  wn_name ? wn_name : "NULL", mn_name ? mn_name : "NULL");
         return ESP_ERR_NOT_FOUND;
     }
@@ -161,18 +168,15 @@ esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state
     s_afe_data   = (s_afe_handle != NULL) ? s_afe_handle->create_from_config(afe_cfg) : NULL;
     afe_config_free(afe_cfg);
     if (s_afe_data == NULL) {
-        ESP_LOGE(TAG, "建立 ESP-AFE 實例失敗");
         return ESP_FAIL;
     }
 
     s_multinet = esp_mn_handle_from_name(mn_name);
     s_mn_data  = (s_multinet != NULL) ? s_multinet->create(mn_name, SR_CMD_LISTEN_TIMEOUT_MS) : NULL;
     if (s_mn_data == NULL) {
-        ESP_LOGE(TAG, "建立 MultiNet 實例失敗: %s", mn_name);
         return ESP_FAIL;
     }
 
-    /* 綁定 MultiNet 實例至命令管理模組，並批次載入標準拼音指令表 */
     esp_mn_commands_alloc(s_multinet, s_mn_data);
     esp_mn_commands_clear();
     memset(s_id_to_cmd, 0, sizeof(s_id_to_cmd));
@@ -205,6 +209,17 @@ static void return_to_wake_listen(void)
         s_afe_handle->enable_wakenet(s_afe_data);
     }
     set_sr_state(SR_STATE_WAKE_LISTEN);
+}
+
+bool sr_engine_poll_timeout(void)
+{
+    if (s_state == SR_STATE_CMD_LISTEN) {
+        if (((esp_timer_get_time() / 1000LL) - s_cmd_start_ms) >= (int64_t)SR_CMD_LISTEN_TIMEOUT_MS) {
+            return_to_wake_listen();
+            return true;
+        }
+    }
+    return false;
 }
 
 static void task_sr_feed(void *arg)
@@ -247,7 +262,6 @@ static void task_sr_detect(void *arg)
 
         if (s_state == SR_STATE_WAKE_LISTEN) {
             if (res->wakeup_state == WAKENET_DETECTED) {
-                ESP_LOGI(TAG, "偵測到喚醒詞 (word=%d)，進入 6 秒命令視窗", res->wake_word_index);
                 s_afe_handle->disable_wakenet(s_afe_data);
                 s_multinet->clean(s_mn_data);
                 s_cmd_start_ms = esp_timer_get_time() / 1000LL;
@@ -260,9 +274,8 @@ static void task_sr_detect(void *arg)
         }
 
         if (s_state == SR_STATE_CMD_LISTEN) {
-            if (((esp_timer_get_time() / 1000LL) - s_cmd_start_ms) >= (int64_t)SR_CMD_LISTEN_TIMEOUT_MS) {
+            if (sr_engine_poll_timeout()) {
                 ESP_LOGI(TAG, "離線命令視窗逾時 (6000ms)，退回喚醒監聽");
-                return_to_wake_listen();
                 continue;
             }
 
@@ -271,8 +284,6 @@ static void task_sr_detect(void *arg)
                 esp_mn_results_t *mn_res = s_multinet->get_results(s_mn_data);
                 if (mn_res != NULL && mn_res->num > 0) {
                     int cmd_idx = mn_res->command_id[0];
-                    ESP_LOGI(TAG, "命中離線指令: id=%d, prob=%.2f, str=%s",
-                             cmd_idx, mn_res->prob[0], mn_res->string);
                     if (cmd_idx >= 1 && cmd_idx <= MAX_DYNAMIC_CMDS &&
                         s_id_to_cmd[cmd_idx] != VOICE_CMD_NONE && s_cmd_cb != NULL) {
                         s_cmd_cb(s_id_to_cmd[cmd_idx]);
@@ -295,7 +306,6 @@ esp_err_t sr_engine_start_tasks(void)
         return ESP_OK;
     }
 
-    /* 啟動前清空初始化期間累積的舊音訊 */
     size_t drain_sz = 0U;
     void *drain_ptr = NULL;
     while ((drain_ptr = xRingbufferReceiveUpTo(s_pcm_rb, &drain_sz, 0, SR_PCM_RINGBUF_BYTES)) != NULL) {
@@ -316,4 +326,25 @@ esp_err_t sr_engine_start_tasks(void)
 sr_listen_state_t sr_engine_get_state(void)
 {
     return s_state;
+}
+
+size_t sr_engine_get_registered_cmd_count(void)
+{
+    return (s_next_cmd_id > 1) ? (size_t)(s_next_cmd_id - 1) : 0U;
+}
+
+voice_cmd_id_t sr_engine_get_mapped_cmd(int mn_cmd_id)
+{
+    if (mn_cmd_id < 1 || mn_cmd_id >= s_next_cmd_id || mn_cmd_id > MAX_DYNAMIC_CMDS) {
+        return VOICE_CMD_NONE;
+    }
+    return s_id_to_cmd[mn_cmd_id];
+}
+
+void sr_engine_set_state_for_test(sr_listen_state_t state)
+{
+    if (state == SR_STATE_CMD_LISTEN) {
+        s_cmd_start_ms = esp_timer_get_time() / 1000LL;
+    }
+    set_sr_state(state);
 }

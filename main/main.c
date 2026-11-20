@@ -29,6 +29,7 @@
 #include "audio_engine.h"
 #include "net_manager.h"
 #include "app_bridges.h"
+#include "app_sr_bridge.h"
 
 /* 硬體未到貨前設為 1，直接進入 Unity 測試選單；實機部署時改回 0 */
 #define FORCE_UNITY_TEST_MENU    0
@@ -135,9 +136,10 @@ void app_main(void)
     app_storage_register_sync_sources();
     ESP_ERROR_CHECK(net_manager_init());
 
-    /* 7. 啟動 Core 1 即時任務（Core 0 網路與語音任務已於 net_manager_init 啟動） */
+    /* 7. 啟動 Core 1 即時任務與離線語音識別橋接器 */
     ESP_ERROR_CHECK_WITHOUT_ABORT(sensor_hub_start_task());
     ESP_ERROR_CHECK_WITHOUT_ABORT(audio_engine_start_task());
+    ESP_ERROR_CHECK_WITHOUT_ABORT(app_sr_bridge_init());
 
     /* 8. 印出開機可用內部 SRAM 與 Octal PSRAM 剩餘容量報告 */
     print_boot_memory_report();

@@ -258,9 +258,15 @@
        - `SR_STATE_WAKE_LISTEN` 命中喚醒詞後切換為 `SR_STATE_CMD_LISTEN`、通知 `oled_ui` 顯示「聆聽中」並播放 `/sdcard/tts_offline/wake.wav`。
        - 在 `SR_STATE_CMD_LISTEN` 下使用 `esp_mn_commands_clear()` / `esp_mn_commands_add()` 註冊全部 18 條漢語拼音指令（音量、播放、OLED 開關與調光、三態網路切換、溫濕度／光照／時間／儲存狀態查詢），識別成功即觸發 `cmd_cb(cmd_id)` 並重置回 `SR_STATE_WAKE_LISTEN`；若超過 `6000 ms` 無有效命令則自動退回待機。
 
-- [ ] **T-08-03：實作離線指令動作派發、SD 卡音節拼接播報與 Phase 8 Unity 單元測試**
-  - **目標檔案**：`components/audio_engine/sr_cmd_dispatcher.c`、`components/audio_engine/test/test_sr_engine.c`、`main/main.c`
+- [x] **T-08-03：實作離線指令動作派發、SD 卡拼音音節拼接播報與 18 條指令接線**
+  - **目標檔案**：`components/audio_engine/sr_engine.c`、`components/audio_engine/sr_cmd_dispatcher.c`、`main/app_media_voice.c`、`main/main.c`
   - **實作規格**：
-    1. 實作 `sr_cmd_dispatcher.c`：提供 `sr_dispatcher_build_number_clips()` 與 `sr_dispatcher_speak_temperature()` / `humidity()` / `lux()` / `time()` / `storage_status()`，將即時數值拆解為 `/sdcard/tts_offline/*.wav` 基礎音節路徑陣列（例如 `25.3°C` 展開為 `2.wav`、`shi.wav`、`5.wav`、`dian.wav`、`3.wav`、`du.wav`），並依序呼叫 `audio_engine_play_file()` 連續播報（若 SD 卡未掛載或缺失音檔則安全降級為 OLED 顯示，絕不崩潰）。
-    2. 在 `main/main.c` 的正常開機流程（`net_manager_init()` 之後）掛載 `sr_engine_init()` 與 `sr_engine_start_tasks()`，並將中央命令回呼接通 18 條離線指令。
-    3. 撰寫 `components/audio_engine/test/test_sr_engine.c` Unity 測試：驗證拼音指令表註冊數量與 ID 映射正確性、模擬 `SR_STATE_CMD_LISTEN` 超過 `6000 ms` 自動退回 `SR_STATE_WAKE_LISTEN`、驗證 `sr_dispatcher_build_number_clips()` 數值拆解音節陣列 100% 吻合預期，並確認無 SD 卡時安全降級不崩潰。
+    1. 補齊 `sr_engine.c` 預設漢語拼音指令表至全部 18 條指令（涵蓋音量、播放、OLED 開關與調光、三態網路切換、溫濕度／光照／時間／儲存狀態查詢），並確保 `SR_STATE_CMD_LISTEN` 超過 `6000 ms` 自動退回 `SR_STATE_WAKE_LISTEN`。
+    2. 實作 `sr_cmd_dispatcher.c`：提供 `sr_dispatcher_build_number_clips()` 與 `sr_dispatcher_speak_temperature()` / `humidity()` / `lux()` / `time()` / `storage_status()`，將即時數值拆解為 `/sdcard/tts_offline/*.wav` 漢語拼音基礎音節路徑陣列（例如 `25.3°C` 展開為 `2.wav`、`shi.wav`、`5.wav`、`dian.wav`、`3.wav`、`du.wav`），並依序呼叫 `audio_engine_play_file_sync()` 連續播報（若 SD 卡未掛載或缺失音檔則安全降級，絕不崩潰）。
+    3. 在 `main/app_media_voice.c` 補齊 18 條離線指令完整動作派發，並於 `main/main.c` 正常開機流程（`net_manager_init()` 之後）啟動離線語音引擎。
+
+- [x] **T-08-04：實作第三層無阻塞語音橋接器（`app_sr_bridge`）與 Phase 8 Unity 單元測試**
+  - **目標檔案**：`main/app_sr_bridge.h`、`main/app_sr_bridge.c`、`components/audio_engine/test/test_sr_engine.c`、`components/audio_engine/test/CMakeLists.txt`
+  - **實作規格**：
+    1. 建立 `main/app_sr_bridge.h/.c`，以非阻塞 FreeRTOS Queue 將 Core 1 `task_sr_detect` 辨識結果轉發至 Core 0 執行 `app_voice_on_command()`，避免 SD 卡音節播報阻塞喚醒詞狀態機。
+    2. 撰寫 `components/audio_engine/test/test_sr_engine.c` Unity 測試：驗證 18 條拼音指令表註冊數量與 ID 映射正確性、驗證 `SR_STATE_CMD_LISTEN` 超過 `6000 ms` 自動退回 `SR_STATE_WAKE_LISTEN`、驗證 `sr_dispatcher_build_number_clips()` 拼音音節陣列展開 100% 吻合預期，並確認無 SD 卡時安全降級不崩潰。
