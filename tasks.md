@@ -231,7 +231,7 @@
     1. 當 Core 1 語音引擎觸發 `AUDIO_EVENT_SPEECH_END`（且非 Phase 8 已命中之本機離線指令）時，透過 FreeRTOS Queue 通知 Core 0 網路任務（**釘選於 Core 0**，優先級 4）。
     2. 在線模式下透過 `esp_http_client` 將 PSRAM 錄音緩衝區上傳至後端語音介面，接收回傳的回覆音訊（儲存至 PSRAM 暫存檔或 `/sdcard/cache/reply.mp3`）後，通知 `audio_engine_play_file()` 播報；離線模式下則直接播放本機 SD 卡預設離線提示音（如 `/sdcard/audio/offline_hint.mp3`）。
 
-- [ ] **T-07-04：全系統雙核心總組裝（`main.c`）與整合驗證**
+- [x] **T-07-04：全系統雙核心總組裝（`main.c`）與整合驗證**
   - **目標檔案**：`main/CMakeLists.txt`、`main/main.c`
   - **實作規格**：
     1. `main/CMakeLists.txt` 列入專案全部元件（`board_bsp psram_cache eeprom_blackbox sd_media env_sensors sensor_hub oled_ui audio_engine net_manager`）與 `unity`、`nvs_flash`、`esp_netif`、`esp_event`。
