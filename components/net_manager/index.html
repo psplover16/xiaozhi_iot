@@ -4,45 +4,89 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Xiaozhi IoT 控制台</title>
-<style>
-  :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#f1f5f9; --sub:#94a3b8; --pri:#38bdf8; --ok:#22c55e; --err:#ef4444; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); padding:16px; line-height:1.5; }
-  .wrap { max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; }
-  .hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
-  h1 { font-size:1.25rem; color:var(--pri); }
-  h2 { font-size:1rem; color:var(--text); }
-  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
-  .stat { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
-  .stat .k { font-size:.75rem; color:var(--sub); }
-  .stat .v { font-size:.95rem; font-weight:600; margin-top:2px; word-break:break-all; }
-  .field { margin-bottom:12px; }
-  label { display:block; font-size:.85rem; color:var(--sub); margin-bottom:4px; }
-  input { width:100%; padding:9px 11px; border-radius:8px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:.95rem; }
-  input:focus { outline:none; border-color:var(--pri); }
-  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .btn { width:100%; padding:11px; border:none; border-radius:8px; background:var(--pri); color:#0f172a; font-weight:700; font-size:.95rem; cursor:pointer; }
-  .btn:active { opacity:.85; }
-  .btn-sm { padding:5px 10px; font-size:.8rem; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); cursor:pointer; }
-  .msg { display:none; padding:10px 12px; border-radius:8px; font-size:.88rem; margin-bottom:12px; }
-  .msg.ok { display:block; background:rgba(34,197,94,.15); border:1px solid var(--ok); color:#86efac; }
-  .msg.err { display:block; background:rgba(239,68,68,.15); border:1px solid var(--err); color:#fca5a5; }
-  @media(max-width:480px){ .grid,.row2 { grid-template-columns:1fr; } }
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div class="wrap">
   <div class="card">
     <div class="hdr">
-      <h1>Xiaozhi IoT 系統狀態</h1>
-      <button type="button" class="btn-sm" onclick="loadStatus()">重新整理</button>
+      <h1>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
+        Xiaozhi IoT 即時監控
+      </h1>
+      <span class="badge" id="st_mode">讀取中...</span>
     </div>
+
+    <div class="env-grid">
+      <div class="env-box">
+        <div class="k">環境溫度</div>
+        <div class="num" id="st_temp">--</div>
+      </div>
+      <div class="env-box">
+        <div class="k">相對濕度</div>
+        <div class="num" id="st_humi">--</div>
+      </div>
+      <div class="env-box">
+        <div class="k">環境照度</div>
+        <div class="num" id="st_lux">--</div>
+      </div>
+    </div>
+
     <div class="grid">
-      <div class="stat"><div class="k">運作模式</div><div class="v" id="st_mode">讀取中...</div></div>
-      <div class="stat"><div class="k">設定 Wi-Fi</div><div class="v" id="st_ssid">--</div></div>
+      <div class="stat"><div class="k">Wi-Fi 狀態</div><div class="v" id="st_wifi">--</div></div>
+      <div class="stat"><div class="k">目標熱點 SSID</div><div class="v" id="st_ssid">--</div></div>
       <div class="stat"><div class="k">EEPROM 離線暫存</div><div class="v" id="st_eeprom">--</div></div>
       <div class="stat"><div class="k">SD 卡儲存狀態</div><div class="v" id="st_sd">--</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <h2>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="6"/><circle cx="8" cy="12" r="2"/></svg>
+        連線開關與遠端遙控
+      </h2>
+      <span class="sub-tag" id="st_vol">音量 --</span>
+    </div>
+
+    <div class="sw-list">
+      <label class="sw-row" for="sw_wifi">
+        <div>
+          <div class="sw-title">區網 Wi-Fi</div>
+          <div class="sw-desc">關閉將中斷熱點與區域網路連線</div>
+        </div>
+        <input id="sw_wifi" type="checkbox" class="toggle">
+      </label>
+      <label class="sw-row" for="sw_cloud">
+        <div>
+          <div class="sw-title">雲端伺服器連線</div>
+          <div class="sw-desc">啟用即時感測上傳與雲端語音對話</div>
+        </div>
+        <input id="sw_cloud" type="checkbox" class="toggle">
+      </label>
+    </div>
+
+    <div class="ctrl-grid">
+      <button type="button" class="ctrl-btn" data-cmd="vol_down">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" y1="12" x2="16" y2="12"/></svg>
+        音量 -
+      </button>
+      <button type="button" class="ctrl-btn" data-cmd="vol_up">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="19" y1="9" x2="19" y2="15"/><line x1="16" y1="12" x2="22" y2="12"/></svg>
+        音量 +
+      </button>
+      <button type="button" class="ctrl-btn" id="btn_mute" data-cmd="mute_toggle">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+        靜音
+      </button>
+      <button type="button" class="ctrl-btn" id="btn_music" data-cmd="music_toggle">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        播放音樂
+      </button>
+      <button type="button" class="ctrl-btn span2" id="btn_speak" data-cmd="speak_env">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        語音播報環境
+      </button>
     </div>
   </div>
 
@@ -87,68 +131,7 @@
   </div>
 </div>
 
-<script>
-const MODE_NAMES = ['離線模式 (OFFLINE)', '在線模式 (ONLINE)', '網頁設定 (WEB_CFG)'];
-
-function showMsg(ok, text) {
-  const el = document.getElementById('msg');
-  el.className = 'msg ' + (ok ? 'ok' : 'err');
-  el.textContent = text;
-}
-
-async function loadConfig() {
-  try {
-    const r = await fetch('/config');
-    if (!r.ok) return;
-    const d = await r.json();
-    document.getElementById('wifi_ssid').value = d.wifi_ssid || '';
-    document.getElementById('wifi_pass').placeholder = d.has_pass ? '已設定密碼（留空則不修改）' : '開放網路或輸入 8~63 字元密碼';
-    document.getElementById('server_url').value = d.server_url || '';
-    document.getElementById('sample_interval_sec').value = d.sample_interval_sec;
-    document.getElementById('psram_window_hours').value = d.psram_window_hours;
-    document.getElementById('eeprom_warn_pct').value = d.eeprom_warn_pct;
-    document.getElementById('sd_warn_free_mb').value = d.sd_warn_free_mb;
-  } catch (e) {}
-}
-
-async function loadStatus() {
-  try {
-    const r = await fetch('/status');
-    if (!r.ok) return;
-    const s = await r.json();
-    document.getElementById('st_mode').textContent = MODE_NAMES[s.mode] || ('模式 ' + s.mode);
-    document.getElementById('st_ssid').textContent = s.wifi_ssid || '(未設定)';
-    document.getElementById('st_eeprom').textContent = s.eeprom_records + ' 筆';
-    document.getElementById('st_sd').textContent = s.sd_mounted ? ('已掛載 / 剩餘 ' + s.sd_free_mb + ' MB') : '未掛載';
-  } catch (e) {}
-}
-
-document.getElementById('cfgForm').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const body = new URLSearchParams(new FormData(ev.target));
-  try {
-    const r = await fetch('/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString()
-    });
-    const txt = await r.text();
-    if (r.ok) {
-      showMsg(true, '設定已成功寫入 NVS！');
-      document.getElementById('wifi_pass').value = '';
-      loadConfig();
-      loadStatus();
-    } else {
-      showMsg(false, '儲存失敗：' + txt);
-    }
-  } catch (e) {
-    showMsg(false, '網路連線中斷，請確認裝置熱點狀態');
-  }
-});
-
-loadConfig();
-loadStatus();
-setInterval(loadStatus, 3000);
-</script>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/app.js" defer></script>
 </body>
 </html>

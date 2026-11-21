@@ -15,6 +15,10 @@ static const char *TAG = "web_config";
 
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
+extern const uint8_t style_css_start[]  asm("_binary_style_css_start");
+extern const uint8_t style_css_end[]    asm("_binary_style_css_end");
+extern const uint8_t app_js_start[]     asm("_binary_app_js_start");
+extern const uint8_t app_js_end[]       asm("_binary_app_js_end");
 
 static httpd_handle_t s_httpd = NULL;
 
@@ -89,6 +93,20 @@ static esp_err_t http_get_root_handler(httpd_req_t *req)
 {
     return web_api_send_static(req, index_html_start, index_html_end,
                                "text/html; charset=utf-8",
+                               "public, max-age=300");
+}
+
+static esp_err_t http_get_css_handler(httpd_req_t *req)
+{
+    return web_api_send_static(req, style_css_start, style_css_end,
+                               "text/css; charset=utf-8",
+                               "public, max-age=300");
+}
+
+static esp_err_t http_get_js_handler(httpd_req_t *req)
+{
+    return web_api_send_static(req, app_js_start, app_js_end,
+                               "application/javascript; charset=utf-8",
                                "public, max-age=300");
 }
 
@@ -218,10 +236,12 @@ esp_err_t web_config_httpd_start(void)
     }
 
     const httpd_uri_t uris[] = {
-        { .uri = "/",       .method = HTTP_GET,  .handler = http_get_root_handler },
-        { .uri = "/config", .method = HTTP_GET,  .handler = http_get_config_handler },
-        { .uri = "/save",   .method = HTTP_POST, .handler = http_post_save_handler },
-        { .uri = "/switch", .method = HTTP_POST, .handler = http_post_switch_handler },
+        { .uri = "/",          .method = HTTP_GET,  .handler = http_get_root_handler },
+        { .uri = "/style.css", .method = HTTP_GET,  .handler = http_get_css_handler },
+        { .uri = "/app.js",    .method = HTTP_GET,  .handler = http_get_js_handler },
+        { .uri = "/config",    .method = HTTP_GET,  .handler = http_get_config_handler },
+        { .uri = "/save",      .method = HTTP_POST, .handler = http_post_save_handler },
+        { .uri = "/switch",    .method = HTTP_POST, .handler = http_post_switch_handler },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         (void)httpd_register_uri_handler(s_httpd, &uris[i]);

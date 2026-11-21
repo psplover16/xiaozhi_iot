@@ -10,6 +10,8 @@ idf_component_register(
         "include"
     EMBED_TXTFILES
         "index.html"
+        "style.css"
+        "app.js"
     REQUIRES
         board_bsp
         esp_wifi

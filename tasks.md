@@ -110,7 +110,7 @@
     - `web_config.c` 與 `web_api.c` 各自 $\le 300$ 行。
     - `/status` 與 `/api/control` 回應時間 $< 100\text{ ms}$，多檔並發載入不發生 Socket 耗盡。
 
-- [ ] **T-OPT-07：重構前端為「即時監控＋遙控面板」（零外部依賴、防連發與超時熔斷）**
+- [x] **T-OPT-07：重構前端為「即時監控＋遙控面板」（零外部依賴、防連發與超時熔斷）**
   - **依賴項目**：`T-OPT-06`
   - **目標檔案**：
     - 修改 `components/net_manager/index.html`（預估 ~150 行）
