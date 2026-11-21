@@ -20,58 +20,13 @@
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "board_bsp.h"
+#include "board_config.h"
 
 static const char *TAG = "board_bsp";
 
 /* =========================================================================
- * 腳位定義鎖死區（依 spec.md 腳位表與 tasks.md T-00-01 規格）
+ * I2C 匯流排運作參數
  * ========================================================================= */
-
-// I2C 匯流排腳位（共用匯流排：OLED, GY-30, DS3231, AT24C256）
-#define BOARD_PIN_I2C_SDA           8
-#define BOARD_PIN_I2C_SCL           9
-
-// SPI2 匯流排與 MicroSD 卡腳位
-#define BOARD_PIN_SD_MOSI           11
-#define BOARD_PIN_SD_MISO           13
-#define BOARD_PIN_SD_CLK            12
-#define BOARD_PIN_SD_CS             10
-
-// I2S0 音訊輸入 (INMP441 麥克風陣列)
-#define BOARD_PIN_I2S_IN_BCLK       4
-#define BOARD_PIN_I2S_IN_WS         5
-#define BOARD_PIN_I2S_IN_DIN        6
-
-// I2S1 音訊輸出 (MAX98357 功放)
-#define BOARD_PIN_I2S_OUT_BCLK      15
-#define BOARD_PIN_I2S_OUT_LRC       16
-#define BOARD_PIN_I2S_OUT_DOUT      7
-
-// 感測器與使用者介面腳位（T-00-01 規格）
-#undef BOARD_PIN_DHT22
-#define BOARD_PIN_DHT22             14
-#undef BOARD_PIN_MODE_BTN
-#define BOARD_PIN_MODE_BTN          1
-#define BOARD_PIN_BACKLIGHT_PWM     2
-
-// 依 plan.md v1.1.0 / spec.md v1.7.0 安全腳位映射別名
-#define BOARD_PIN_DHT22_SAFE        4
-#define BOARD_PIN_MIC_WS_SAFE       15
-#define BOARD_PIN_MIC_BCLK_SAFE     16
-#define BOARD_PIN_MIC_DIN_SAFE      17
-#define BOARD_PIN_SPK_LRC_SAFE      18
-#define BOARD_PIN_SPK_BCLK_SAFE     21
-#define BOARD_PIN_SPK_DOUT_SAFE     38
-
-/* =========================================================================
- * 7-bit I2C 裝置位址常數定義
- * ========================================================================= */
-#define I2C_DEV_ADDR_OLED           0x3C
-#define I2C_DEV_ADDR_GY30           0x23
-#define I2C_DEV_ADDR_DS3231         0x68
-#define I2C_DEV_ADDR_EEPROM         0x50
-
 #define I2C_DEV_CACHE_SIZE          8
 #define I2C_BUS_TIMEOUT_MS          100
 #define I2C_BUS_FREQ_HZ             400000
@@ -194,10 +149,10 @@ esp_err_t board_init(void)
 
     // 預先快取 4 個核心 I2C 裝置 Handle (OLED, GY-30, DS3231, AT24C256)
     const uint8_t core_dev_addrs[] = {
-        I2C_DEV_ADDR_OLED,
-        I2C_DEV_ADDR_GY30,
-        I2C_DEV_ADDR_DS3231,
-        I2C_DEV_ADDR_EEPROM
+        I2C_ADDR_OLED,
+        I2C_ADDR_GY30,
+        I2C_ADDR_DS3231,
+        I2C_ADDR_EEPROM
     };
     for (size_t i = 0; i < sizeof(core_dev_addrs); i++) {
         i2c_master_dev_handle_t dev_h = NULL;
