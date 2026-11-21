@@ -1,22 +1,17 @@
 #include "net_manager_priv.h"
+#include "web_api.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_wifi.h"
-#include "esp_netif.h"
+#include <strings.h>
 #include "esp_http_server.h"
 #include "esp_log.h"
 
 static const char *TAG = "web_config";
 
-#define SOFTAP_DEFAULT_SSID     "Xiaozhi_Setup"
-#define SOFTAP_DEFAULT_PASS     "12345678"
-#define STA_CFG_TIMEOUT_MS      10000U
 #define POST_MAX_BODY_LEN       1024U
+#define WIFI_OFF_RESPONSE_DELAY 180U
 
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
@@ -38,21 +33,6 @@ static void set_err(char *err_msg, size_t err_len, const char *msg)
         strncpy(err_msg, msg, err_len - 1U);
         err_msg[err_len - 1U] = '\0';
     }
-}
-
-static void json_escape(char *dst, size_t dst_len, const char *src)
-{
-    size_t di = 0;
-    for (size_t si = 0; src[si] != '\0' && (di + 2U) < dst_len; si++) {
-        unsigned char c = (unsigned char)src[si];
-        if (c == '"' || c == '\\') {
-            dst[di++] = '\\';
-            dst[di++] = (char)c;
-        } else if (c >= 0x20U) {
-            dst[di++] = (char)c;
-        }
-    }
-    dst[di] = '\0';
 }
 
 esp_err_t web_config_validate(const sys_config_t *cfg, char *err_msg, size_t err_len)
@@ -105,59 +85,11 @@ esp_err_t web_config_validate(const sys_config_t *cfg, char *err_msg, size_t err
     return ESP_OK;
 }
 
-static void url_decode(char *dst, size_t dst_len, const char *src)
-{
-    size_t di = 0;
-    for (size_t si = 0; src[si] != '\0' && (di + 1U) < dst_len; si++) {
-        if (src[si] == '+') {
-            dst[di++] = ' ';
-        } else if (src[si] == '%' &&
-                   isxdigit((unsigned char)src[si + 1]) &&
-                   isxdigit((unsigned char)src[si + 2])) {
-            char hex[3] = { src[si + 1], src[si + 2], '\0' };
-            dst[di++] = (char)strtol(hex, NULL, 16);
-            si += 2;
-        } else {
-            dst[di++] = src[si];
-        }
-    }
-    dst[di] = '\0';
-}
-
-static bool extract_form_field(const char *body, const char *key,
-                               char *out_val, size_t out_len)
-{
-    size_t klen = strlen(key);
-    const char *p = body;
-    while (p != NULL && *p != '\0') {
-        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
-            const char *val_start = p + klen + 1U;
-            const char *amp = strchr(val_start, '&');
-            size_t raw_len = (amp != NULL) ? (size_t)(amp - val_start) : strlen(val_start);
-            char raw_buf[256];
-            if (raw_len >= sizeof(raw_buf)) {
-                raw_len = sizeof(raw_buf) - 1U;
-            }
-            memcpy(raw_buf, val_start, raw_len);
-            raw_buf[raw_len] = '\0';
-            url_decode(out_val, out_len, raw_buf);
-            return true;
-        }
-        const char *next = strchr(p, '&');
-        p = (next != NULL) ? (next + 1U) : NULL;
-    }
-    return false;
-}
-
 static esp_err_t http_get_root_handler(httpd_req_t *req)
 {
-    size_t html_len = (size_t)(index_html_end - index_html_start);
-    if (html_len > 0U && index_html_start[html_len - 1U] == '\0') {
-        html_len--;
-    }
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    return httpd_resp_send(req, (const char *)index_html_start, (ssize_t)html_len);
+    return web_api_send_static(req, index_html_start, index_html_end,
+                               "text/html; charset=utf-8",
+                               "public, max-age=300");
 }
 
 static esp_err_t http_get_config_handler(httpd_req_t *req)
@@ -166,8 +98,8 @@ static esp_err_t http_get_config_handler(httpd_req_t *req)
     net_mgr_get_config_copy(&cfg);
 
     char esc_ssid[64], esc_url[256], json[512];
-    json_escape(esc_ssid, sizeof(esc_ssid), cfg.wifi_ssid);
-    json_escape(esc_url, sizeof(esc_url), cfg.server_url);
+    web_api_json_escape(esc_ssid, sizeof(esc_ssid), cfg.wifi_ssid);
+    web_api_json_escape(esc_url, sizeof(esc_url), cfg.server_url);
 
     snprintf(json, sizeof(json),
              "{\"wifi_ssid\":\"%s\",\"has_pass\":%s,\"server_url\":\"%s\","
@@ -177,55 +109,45 @@ static esp_err_t http_get_config_handler(httpd_req_t *req)
              (unsigned)cfg.sample_interval_sec, (unsigned)cfg.psram_window_hours,
              (unsigned)cfg.eeprom_warn_pct, (unsigned)cfg.sd_warn_free_mb);
 
-    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t http_post_save_handler(httpd_req_t *req)
 {
-    if (req->content_len == 0 || req->content_len > POST_MAX_BODY_LEN) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body length");
+    char body[POST_MAX_BODY_LEN + 1U];
+    if (!web_api_recv_post_body(req, body, sizeof(body))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
         return ESP_FAIL;
     }
-
-    char body[POST_MAX_BODY_LEN + 1U];
-    size_t received = 0;
-    while (received < (size_t)req->content_len) {
-        int r = httpd_req_recv(req, body + received, (size_t)req->content_len - received);
-        if (r <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Receive failed");
-            return ESP_FAIL;
-        }
-        received += (size_t)r;
-    }
-    body[received] = '\0';
 
     sys_config_t candidate;
     net_mgr_get_config_copy(&candidate);
 
     char val[128];
-    if (extract_form_field(body, "wifi_ssid", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "wifi_ssid", val, sizeof(val))) {
         strncpy(candidate.wifi_ssid, val, sizeof(candidate.wifi_ssid) - 1U);
         candidate.wifi_ssid[sizeof(candidate.wifi_ssid) - 1U] = '\0';
     }
-    if (extract_form_field(body, "wifi_pass", val, sizeof(val)) && val[0] != '\0') {
+    if (web_api_extract_form_field(body, "wifi_pass", val, sizeof(val)) && val[0] != '\0') {
         strncpy(candidate.wifi_pass, val, sizeof(candidate.wifi_pass) - 1U);
         candidate.wifi_pass[sizeof(candidate.wifi_pass) - 1U] = '\0';
     }
-    if (extract_form_field(body, "server_url", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "server_url", val, sizeof(val))) {
         strncpy(candidate.server_url, val, sizeof(candidate.server_url) - 1U);
         candidate.server_url[sizeof(candidate.server_url) - 1U] = '\0';
     }
-    if (extract_form_field(body, "sample_interval_sec", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "sample_interval_sec", val, sizeof(val))) {
         candidate.sample_interval_sec = (uint16_t)strtoul(val, NULL, 10);
     }
-    if (extract_form_field(body, "psram_window_hours", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "psram_window_hours", val, sizeof(val))) {
         candidate.psram_window_hours = (uint8_t)strtoul(val, NULL, 10);
     }
-    if (extract_form_field(body, "eeprom_warn_pct", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "eeprom_warn_pct", val, sizeof(val))) {
         candidate.eeprom_warn_pct = (uint8_t)strtoul(val, NULL, 10);
     }
-    if (extract_form_field(body, "sd_warn_free_mb", val, sizeof(val))) {
+    if (web_api_extract_form_field(body, "sd_warn_free_mb", val, sizeof(val))) {
         candidate.sd_warn_free_mb = (uint16_t)strtoul(val, NULL, 10);
     }
 
@@ -240,108 +162,58 @@ static esp_err_t http_post_save_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    net_mode_ctrl_on_config_saved(&candidate);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_send(req, "設定已儲存成功！<a href='/'>返回</a>", HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t http_get_status_handler(httpd_req_t *req)
+static esp_err_t http_post_switch_handler(httpd_req_t *req)
 {
-    sys_config_t cfg;
-    net_mgr_get_config_copy(&cfg);
-
-    uint16_t eeprom_cnt = 0;
-    bool sd_mounted = false;
-    uint32_t sd_free_mb = 0;
-    net_mgr_query_storage_status(&eeprom_cnt, &sd_mounted, &sd_free_mb);
-
-    char esc_ssid[64], json[360];
-    json_escape(esc_ssid, sizeof(esc_ssid), cfg.wifi_ssid);
-
-    snprintf(json, sizeof(json),
-             "{\"mode\":%d,\"wifi_ssid\":\"%s\",\"sample_interval_sec\":%u,"
-             "\"eeprom_records\":%u,\"sd_mounted\":%s,\"sd_free_mb\":%lu}",
-             (int)net_manager_get_mode(), esc_ssid,
-             (unsigned)cfg.sample_interval_sec, (unsigned)eeprom_cnt,
-             sd_mounted ? "true" : "false", (unsigned long)sd_free_mb);
-
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
-}
-
-static bool try_sta_connect_with_timeout(const sys_config_t *cfg)
-{
-    if (cfg->wifi_ssid[0] == '\0') {
-        return false;
+    char body[256];
+    if (!web_api_recv_post_body(req, body, sizeof(body))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return ESP_FAIL;
     }
 
-    wifi_config_t sta_cfg = {0};
-    strncpy((char *)sta_cfg.sta.ssid, cfg->wifi_ssid, sizeof(sta_cfg.sta.ssid) - 1U);
-    strncpy((char *)sta_cfg.sta.password, cfg->wifi_pass, sizeof(sta_cfg.sta.password) - 1U);
-    sta_cfg.sta.threshold.authmode = (cfg->wifi_pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK
-                                                                : WIFI_AUTH_OPEN;
-
-    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK ||
-        esp_wifi_set_config(WIFI_IF_STA, &sta_cfg) != ESP_OK ||
-        esp_wifi_start() != ESP_OK) {
-        return false;
+    char val[16];
+    if (web_api_extract_form_field(body, "cloud_en", val, sizeof(val))) {
+        bool c_en = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        net_manager_set_cloud_enabled(c_en);
     }
-
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    esp_netif_ip_info_t ip_info;
-    for (uint32_t elapsed = 0; elapsed < STA_CFG_TIMEOUT_MS; elapsed += 200U) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-        if (sta != NULL && esp_netif_get_ip_info(sta, &ip_info) == ESP_OK &&
-            ip_info.ip.addr != 0U) {
-            char ip_str[20];
-            snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
-            net_mgr_notify_mode(NET_MODE_WEB_CFG, ip_str);
-            return true;
+    if (web_api_extract_form_field(body, "wifi_en", val, sizeof(val))) {
+        bool w_en = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0);
+        if (!w_en) {
+            net_mode_ctrl_set_wifi_delayed(false, WIFI_OFF_RESPONSE_DELAY);
+        } else {
+            (void)net_manager_set_wifi_enabled(true);
         }
     }
 
-    (void)esp_wifi_stop();
-    return false;
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"ok\":true,\"wifi_en\":%s,\"cloud_en\":%s}",
+             net_manager_is_wifi_enabled() ? "true" : "false",
+             net_manager_is_cloud_enabled() ? "true" : "false");
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
 }
 
-static esp_err_t start_softap_fallback(void)
-{
-    wifi_config_t ap_cfg = {0};
-    strncpy((char *)ap_cfg.ap.ssid, SOFTAP_DEFAULT_SSID, sizeof(ap_cfg.ap.ssid) - 1U);
-    strncpy((char *)ap_cfg.ap.password, SOFTAP_DEFAULT_PASS, sizeof(ap_cfg.ap.password) - 1U);
-    ap_cfg.ap.ssid_len       = (uint8_t)strlen(SOFTAP_DEFAULT_SSID);
-    ap_cfg.ap.channel        = 1;
-    ap_cfg.ap.max_connection = 4;
-    ap_cfg.ap.authmode       = WIFI_AUTH_WPA2_PSK;
-
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_mode(WIFI_MODE_AP));
-    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
-    esp_err_t err = esp_wifi_start();
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "已啟動 SoftAP: SSID=%s, IP=192.168.4.1", SOFTAP_DEFAULT_SSID);
-        net_mgr_notify_mode(NET_MODE_WEB_CFG, "192.168.4.1");
-    }
-    return err;
-}
-
-esp_err_t web_config_start(const sys_config_t *cfg)
+esp_err_t web_config_httpd_start(void)
 {
     if (s_httpd != NULL) {
         return ESP_OK;
     }
 
-    if (!try_sta_connect_with_timeout(cfg)) {
-        esp_err_t ap_err = start_softap_fallback();
-        if (ap_err != ESP_OK) {
-            return ap_err;
-        }
-    }
-
-    httpd_config_t httpd_cfg = HTTPD_DEFAULT_CONFIG();
-    httpd_cfg.core_id        = 0;
-    httpd_cfg.stack_size     = 8192;
+    httpd_config_t httpd_cfg   = HTTPD_DEFAULT_CONFIG();
+    httpd_cfg.core_id          = 0;
+    httpd_cfg.stack_size       = 8192;
+    httpd_cfg.max_open_sockets = 7;
+    httpd_cfg.lru_purge_enable = true;
+    httpd_cfg.max_uri_handlers = 12;
 
     esp_err_t err = httpd_start(&s_httpd, &httpd_cfg);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "httpd_start 失敗: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -349,12 +221,19 @@ esp_err_t web_config_start(const sys_config_t *cfg)
         { .uri = "/",       .method = HTTP_GET,  .handler = http_get_root_handler },
         { .uri = "/config", .method = HTTP_GET,  .handler = http_get_config_handler },
         { .uri = "/save",   .method = HTTP_POST, .handler = http_post_save_handler },
-        { .uri = "/status", .method = HTTP_GET,  .handler = http_get_status_handler },
+        { .uri = "/switch", .method = HTTP_POST, .handler = http_post_switch_handler },
     };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         (void)httpd_register_uri_handler(s_httpd, &uris[i]);
     }
+    (void)web_api_register_routes(s_httpd);
     return ESP_OK;
+}
+
+esp_err_t web_config_start(const sys_config_t *cfg)
+{
+    (void)cfg;
+    return web_config_httpd_start();
 }
 
 void web_config_stop(void)

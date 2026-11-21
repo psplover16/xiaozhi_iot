@@ -9,7 +9,7 @@
 
 ## Phase 1：音訊防回音與單聲道串流優化（`audio_engine` / `voice_cloud`）
 
-- [ ] **T-OPT-01：實作全場景聲學回音消除（AEC）與 Q16.16 無漂移重採樣**
+- [x] **T-OPT-01：實作全場景聲學回音消除（AEC）與 Q16.16 無漂移重採樣**
   - **依賴項目**：無（可最優先啟動）
   - **目標檔案**：
     - 新增 `components/audio_engine/include/aec_ref.h`（預估 ~60 行）
@@ -25,7 +25,7 @@
     - 單檔行數皆 $\le 300$ 行。
     - 待機喚醒靈敏度正常；連續播放 44.1 kHz 音樂 3 分鐘以上無自激喚醒，2 公尺內喊喚醒詞可即時打斷且後續指令辨識無失真。
 
-- [ ] **T-OPT-02：雲端語音上傳改為單聲道（含 AGC 與 HTTP 串流即時中斷）**
+- [x] **T-OPT-02：雲端語音上傳改為單聲道（含 AGC 與 HTTP 串流即時中斷）**
   - **依賴項目**：`T-OPT-01`
   - **目標檔案**：
     - 修改 `components/audio_engine/audio_engine.c`
@@ -44,7 +44,7 @@
 
 ## Phase 2：網路雙獨立開關、mDNS 與實體按鍵重構（`net_manager`）
 
-- [ ] **T-OPT-03：實作「區網 Wi-Fi」與「雲端伺服器」雙獨立開關狀態機與 mDNS**
+- [x] **T-OPT-03：實作「區網 Wi-Fi」與「雲端伺服器」雙獨立開關狀態機與 mDNS**
   - **依賴項目**：無（可與 Phase 1 平行開發）
   - **目標檔案**：
     - 修改 `components/net_manager/include/net_manager.h`（預估 ~160 行）
@@ -64,7 +64,7 @@
     - `net_manager.c` 與 `net_mode_ctrl.c` 行數皆 $\le 300$ 行。
     - 重燒韌體保留原有 Wi-Fi 帳密；播音期間切換開關無爆音；反覆開關 Wi-Fi 無 Socket 記憶體洩漏；手機可透過 `http://xiaozhi.local` 連線。
 
-- [ ] **T-OPT-04：重構實體按鍵為「1.5 秒單一分界點（短按開關 Wi-Fi／長按開熱點）」**
+- [x] **T-OPT-04：重構實體按鍵為「1.5 秒單一分界點（短按開關 Wi-Fi／長按開熱點）」**
   - **依賴項目**：`T-OPT-03`
   - **目標檔案**：
     - 修改 `components/net_manager/net_mode_ctrl.c`
@@ -82,7 +82,7 @@
 
 ## Phase 3：跨模組橋接、Web API 與前端面板升級（`main` / `web_config` / `web_api`）
 
-- [ ] **T-OPT-05：實作 `net_manager_hooks_t` 高內聚快照與執行緒安全控制橋接**
+- [x] **T-OPT-05：實作 `net_manager_hooks_t` 高內聚快照與執行緒安全控制橋接**
   - **依賴項目**：`T-OPT-01`、`T-OPT-03`
   - **目標檔案**：
     - 修改 `components/net_manager/include/net_manager.h`
@@ -95,7 +95,7 @@
     - 編譯零循環依賴，所有修改檔案 $\le 300$ 行。
     - 播音樂時從網頁連點「語音播報環境」或「停止音樂」絕不發生雙核心競爭當機或破音。
 
-- [ ] **T-OPT-06：拆分並實作 `web_api.c` 控制路由與 HTTPD 並發調校**
+- [x] **T-OPT-06：拆分並實作 `web_api.c` 控制路由與 HTTPD 並發調校**
   - **依賴項目**：`T-OPT-03`、`T-OPT-05`
   - **目標檔案**：
     - 新增 `components/net_manager/web_api.h`（預估 ~40 行）

@@ -1,8 +1,10 @@
 idf_component_register(
     SRCS
         "audio_engine.c"
+        "audio_tx_ctrl.c"
         "sr_engine.c"
         "sr_cmd_dispatcher.c"
+        "aec_ref.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

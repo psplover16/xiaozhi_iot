@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -27,7 +28,97 @@ static const char *TAG = "app_voice";
 #define SD_VOICE_MUTEX_WAIT_MS  1000U
 #define AUDIO_RX_SAMPLE_RATE_HZ 16000U
 
-static bool s_is_muted = false;
+static atomic_bool   s_is_muted         = false;
+static atomic_bool   s_is_music_playing = false;
+static atomic_bool   s_is_speaking      = false;
+static portMUX_TYPE  s_err_spinlock     = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t      s_err_seq          = 0U;
+static char          s_last_err[64]     = {0};
+
+static void record_async_error(const char *msg)
+{
+    if (msg == NULL) {
+        return;
+    }
+    taskENTER_CRITICAL(&s_err_spinlock);
+    s_err_seq++;
+    strncpy(s_last_err, msg, sizeof(s_last_err) - 1U);
+    s_last_err[sizeof(s_last_err) - 1U] = '\0';
+    taskEXIT_CRITICAL(&s_err_spinlock);
+    ESP_LOGW(TAG, "非同步控制錯誤 (#%lu): %s", (unsigned long)s_err_seq, msg);
+}
+
+bool app_voice_is_audio_busy(void *ctx)
+{
+    (void)ctx;
+    return atomic_load(&s_is_music_playing) || atomic_load(&s_is_speaking);
+}
+
+esp_err_t app_voice_get_sys_status(sys_status_snapshot_t *out_status, void *ctx)
+{
+    (void)ctx;
+    if (out_status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out_status, 0, sizeof(sys_status_snapshot_t));
+
+    sensor_record_t rec = {0};
+    env_stats_t stats = {0};
+    if (app_storage_get_latest_snapshot(&rec, &stats)) {
+        out_status->sensor_valid = true;
+        out_status->temp_c = (rec.temperature != INVALID_TEMP_VALUE)
+                                 ? ((float)rec.temperature / 10.0f)
+                                 : stats.temp_avg;
+        out_status->humi_pct = (rec.humidity != INVALID_HUMI_VALUE)
+                                   ? ((float)rec.humidity / 10.0f)
+                                   : stats.humi_avg;
+        out_status->lux = (rec.lux > 0xFFFFU) ? 0xFFFFU : (uint16_t)rec.lux;
+        out_status->sensor_ts = rec.timestamp;
+    }
+
+    out_status->volume_pct       = audio_engine_adjust_volume(0);
+    out_status->is_muted         = atomic_load(&s_is_muted);
+    out_status->is_music_playing = atomic_load(&s_is_music_playing);
+    out_status->is_audio_busy    = app_voice_is_audio_busy(NULL);
+
+    taskENTER_CRITICAL(&s_err_spinlock);
+    out_status->err_seq = s_err_seq;
+    memcpy(out_status->last_err, s_last_err, sizeof(out_status->last_err));
+    taskEXIT_CRITICAL(&s_err_spinlock);
+
+    return ESP_OK;
+}
+
+esp_err_t app_voice_exec_ctrl_cmd(ctrl_cmd_id_t cmd, void *ctx)
+{
+    (void)ctx;
+    voice_cmd_id_t mapped = VOICE_CMD_NONE;
+
+    switch (cmd) {
+        case CTRL_CMD_VOL_UP:
+            mapped = VOICE_CMD_VOL_UP;
+            break;
+        case CTRL_CMD_VOL_DOWN:
+            mapped = VOICE_CMD_VOL_DOWN;
+            break;
+        case CTRL_CMD_MUTE_TOGGLE:
+            mapped = VOICE_CMD_MUTE;
+            break;
+        case CTRL_CMD_MUSIC_TOGGLE:
+            mapped = atomic_load(&s_is_music_playing)
+                         ? VOICE_CMD_STOP_MUSIC
+                         : VOICE_CMD_PLAY_MUSIC;
+            break;
+        case CTRL_CMD_SPEAK_ENV:
+            mapped = VOICE_CMD_REPORT_ENV;
+            break;
+        default:
+            return ESP_ERR_INVALID_ARG;
+    }
+
+    audio_engine_inject_cmd(mapped);
+    return ESP_OK;
+}
 
 void app_voice_on_audio_event(audio_event_t event, size_t pcm_bytes)
 {
@@ -55,7 +146,7 @@ esp_err_t app_voice_on_tts_ready(const uint8_t *audio_data, size_t audio_len,
         return ESP_ERR_INVALID_ARG;
     }
     if (!sd_media_is_mounted()) {
-        ESP_LOGW(TAG, "SD 卡未掛載，無法暫存雲端 TTS 回覆音訊");
+        record_async_error("SD 卡未掛載，無法暫存雲端語音");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -76,7 +167,7 @@ esp_err_t app_voice_on_tts_ready(const uint8_t *audio_data, size_t audio_len,
     FILE *fp = fopen(target_path, "wb");
     if (fp == NULL) {
         xSemaphoreGive(sd_mtx);
-        ESP_LOGE(TAG, "開啟暫存檔失敗: %s", target_path);
+        record_async_error("開啟 TTS 暫存檔失敗");
         return ESP_FAIL;
     }
 
@@ -87,12 +178,15 @@ esp_err_t app_voice_on_tts_ready(const uint8_t *audio_data, size_t audio_len,
     xSemaphoreGive(sd_mtx);
 
     if (written != audio_len) {
-        ESP_LOGE(TAG, "寫入 TTS 暫存檔不完整 (%u / %u)",
-                 (unsigned)written, (unsigned)audio_len);
+        record_async_error("寫入 TTS 暫存檔不完整");
         return ESP_FAIL;
     }
 
-    return audio_engine_play_file(target_path);
+    atomic_store(&s_is_music_playing, false);
+    atomic_store(&s_is_speaking, true);
+    esp_err_t err = audio_engine_play_file(target_path);
+    atomic_store(&s_is_speaking, false);
+    return err;
 }
 
 esp_err_t app_voice_on_play_file(const char *filepath, void *ctx)
@@ -101,24 +195,41 @@ esp_err_t app_voice_on_play_file(const char *filepath, void *ctx)
     if (filepath == NULL || filepath[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
-    return audio_engine_play_file(filepath);
+    atomic_store(&s_is_music_playing, false);
+    atomic_store(&s_is_speaking, true);
+    esp_err_t err = audio_engine_play_file(filepath);
+    atomic_store(&s_is_speaking, false);
+    return err;
 }
 
 static void play_default_local_music(void)
 {
     if (!sd_media_is_mounted()) {
-        ESP_LOGW(TAG, "SD 卡未掛載，無法播放本機音樂");
+        atomic_store(&s_is_music_playing, false);
+        record_async_error("SD 卡未掛載，無法播放音樂");
         return;
     }
 
+    const char *music_path = NULL;
     struct stat st;
     if (stat(SD_DEFAULT_MUSIC_MP3, &st) == 0) {
-        (void)audio_engine_play_file(SD_DEFAULT_MUSIC_MP3);
+        music_path = SD_DEFAULT_MUSIC_MP3;
     } else if (stat(SD_DEFAULT_MUSIC_WAV, &st) == 0) {
-        (void)audio_engine_play_file(SD_DEFAULT_MUSIC_WAV);
+        music_path = SD_DEFAULT_MUSIC_WAV;
     } else {
-        ESP_LOGW(TAG, "找不到預設音樂檔 (%s 或 %s)",
-                 SD_DEFAULT_MUSIC_MP3, SD_DEFAULT_MUSIC_WAV);
+        atomic_store(&s_is_music_playing, false);
+        record_async_error("SD 卡找不到預設音樂檔");
+        return;
+    }
+
+    if (app_voice_is_audio_busy(NULL)) {
+        (void)audio_engine_stop_playback();
+    }
+    if (audio_engine_play_file(music_path) == ESP_OK) {
+        atomic_store(&s_is_music_playing, true);
+    } else {
+        atomic_store(&s_is_music_playing, false);
+        record_async_error("音樂解碼器啟動失敗");
     }
 }
 
@@ -139,11 +250,20 @@ void app_voice_on_command(voice_cmd_id_t cmd)
             break;
 
         case VOICE_CMD_REPORT_ENV: {
+            if (atomic_load(&s_is_music_playing)) {
+                (void)audio_engine_stop_playback();
+                atomic_store(&s_is_music_playing, false);
+            }
             env_stats_t stats = {0};
-            if (app_storage_get_latest_snapshot(NULL, &stats)) {
-                (void)audio_engine_speak_env_stats(&stats);
-            } else {
-                ESP_LOGW(TAG, "尚無有效環境統計快照可供語音播報");
+            if (!app_storage_get_latest_snapshot(NULL, &stats)) {
+                record_async_error("尚無有效環境統計快照");
+                break;
+            }
+            atomic_store(&s_is_speaking, true);
+            esp_err_t err = audio_engine_speak_env_stats(&stats);
+            atomic_store(&s_is_speaking, false);
+            if (err != ESP_OK) {
+                record_async_error("環境語音播報失敗（請檢查 SD 卡）");
             }
             break;
         }
@@ -154,11 +274,16 @@ void app_voice_on_command(voice_cmd_id_t cmd)
 
         case VOICE_CMD_STOP_MUSIC:
             (void)audio_engine_stop_playback();
+            atomic_store(&s_is_music_playing, false);
+            atomic_store(&s_is_speaking, false);
             break;
 
         case VOICE_CMD_WAKEUP:
             if (sd_media_is_mounted()) {
+                atomic_store(&s_is_music_playing, false);
+                atomic_store(&s_is_speaking, true);
                 (void)audio_engine_play_file(SD_WAKE_WAV_PATH);
+                atomic_store(&s_is_speaking, false);
             }
             break;
 
@@ -166,30 +291,26 @@ void app_voice_on_command(voice_cmd_id_t cmd)
             time_t now = time(NULL);
             struct tm tm_info;
             localtime_r(&now, &tm_info);
-            ESP_LOGI(TAG, "目前本地時間: %04d-%02d-%02d %02d:%02d:%02d",
-                     tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
-                     tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec);
+            atomic_store(&s_is_speaking, true);
             (void)sr_dispatcher_speak_time((uint8_t)tm_info.tm_hour, (uint8_t)tm_info.tm_min);
+            atomic_store(&s_is_speaking, false);
             break;
         }
 
-        case VOICE_CMD_VOL_UP: {
-            uint8_t vol = audio_engine_adjust_volume(10);
-            ESP_LOGI(TAG, "音量調升至 %u%%", (unsigned)vol);
+        case VOICE_CMD_VOL_UP:
+            (void)audio_engine_adjust_volume(10);
+            break;
+
+        case VOICE_CMD_VOL_DOWN:
+            (void)audio_engine_adjust_volume(-10);
+            break;
+
+        case VOICE_CMD_MUTE: {
+            bool next_mute = !atomic_load(&s_is_muted);
+            atomic_store(&s_is_muted, next_mute);
+            (void)audio_engine_set_mute(next_mute);
             break;
         }
-
-        case VOICE_CMD_VOL_DOWN: {
-            uint8_t vol = audio_engine_adjust_volume(-10);
-            ESP_LOGI(TAG, "音量調降至 %u%%", (unsigned)vol);
-            break;
-        }
-
-        case VOICE_CMD_MUTE:
-            s_is_muted = !s_is_muted;
-            (void)audio_engine_set_mute(s_is_muted);
-            ESP_LOGI(TAG, "靜音狀態切換為: %s", s_is_muted ? "靜音" : "取消靜音");
-            break;
 
         case VOICE_CMD_NONE:
         default:

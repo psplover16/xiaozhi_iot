@@ -1,9 +1,11 @@
 /**
  * @file sr_engine.c
- * @brief Offline Speech Recognition Engine (ESP-AFE Dual-Mic + WakeNet + MultiNet)
+ * @brief Offline Speech Recognition Engine (ESP-AFE 2-Mic+1-Ref AEC + WakeNet + MultiNet)
  */
 
 #include "sr_engine.h"
+#include "audio_engine_priv.h"
+#include "aec_ref.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,16 +68,13 @@ static const esp_afe_sr_iface_t  *s_afe_handle    = NULL;
 static esp_afe_sr_data_t         *s_afe_data      = NULL;
 static const esp_mn_iface_t      *s_multinet      = NULL;
 static model_iface_data_t        *s_mn_data       = NULL;
-
 static RingbufHandle_t            s_pcm_rb        = NULL;
 static StaticRingbuffer_t        *s_rb_struct     = NULL;
 static uint8_t                   *s_rb_storage    = NULL;
-
 static voice_cmd_callback_t       s_cmd_cb        = NULL;
 static sr_state_change_cb_t       s_state_cb      = NULL;
 static volatile sr_listen_state_t s_state         = SR_STATE_IDLE;
 static volatile int64_t           s_cmd_start_ms  = 0;
-
 static voice_cmd_id_t             s_id_to_cmd[MAX_DYNAMIC_CMDS + 1];
 static int                        s_next_cmd_id   = 1;
 static bool                       s_initialized   = false;
@@ -85,29 +84,21 @@ static void set_sr_state(sr_listen_state_t next)
 {
     if (s_state != next) {
         s_state = next;
-        if (s_state_cb != NULL) {
-            s_state_cb(next);
-        }
+        if (s_state_cb != NULL) s_state_cb(next);
     }
 }
 
 static void on_audio_pcm_tap(const int16_t *stereo_pcm, size_t frame_count)
 {
-    if (s_pcm_rb == NULL || stereo_pcm == NULL || frame_count == 0U) {
-        return;
+    if (s_pcm_rb != NULL && stereo_pcm != NULL && frame_count > 0U) {
+        (void)xRingbufferSend(s_pcm_rb, stereo_pcm, frame_count * 2U * sizeof(int16_t), 0);
     }
-    size_t bytes = frame_count * 2U * sizeof(int16_t);
-    (void)xRingbufferSend(s_pcm_rb, stereo_pcm, bytes, 0);
 }
 
 static esp_err_t add_pinyin_cmd_internal(voice_cmd_id_t cmd_id, const char *pinyin_str, bool update_now)
 {
-    if (s_multinet == NULL || s_mn_data == NULL || pinyin_str == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (s_next_cmd_id > MAX_DYNAMIC_CMDS) {
-        return ESP_ERR_NO_MEM;
-    }
+    if (s_multinet == NULL || s_mn_data == NULL || pinyin_str == NULL) return ESP_ERR_INVALID_STATE;
+    if (s_next_cmd_id > MAX_DYNAMIC_CMDS) return ESP_ERR_NO_MEM;
 
     int assigned_id = s_next_cmd_id;
     esp_err_t err = esp_mn_commands_add(assigned_id, (char *)pinyin_str);
@@ -115,12 +106,9 @@ static esp_err_t add_pinyin_cmd_internal(voice_cmd_id_t cmd_id, const char *piny
         ESP_LOGE(TAG, "註冊拼音指令失敗 [%s]: %s", pinyin_str, esp_err_to_name(err));
         return err;
     }
-
     s_id_to_cmd[assigned_id] = cmd_id;
     s_next_cmd_id++;
-    if (update_now) {
-        esp_mn_commands_update();
-    }
+    if (update_now) esp_mn_commands_update();
     return ESP_OK;
 }
 
@@ -131,12 +119,11 @@ esp_err_t sr_engine_add_pinyin_cmd(voice_cmd_id_t cmd_id, const char *pinyin_str
 
 esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state_cb)
 {
-    if (s_initialized) {
-        return ESP_OK;
-    }
+    if (s_initialized) return ESP_OK;
 
     s_cmd_cb   = cmd_cb;
     s_state_cb = state_cb;
+    (void)aec_ref_init();
 
     s_models = esp_srmodel_init("model");
     if (s_models == NULL || s_models->num <= 0) {
@@ -152,14 +139,14 @@ esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state
         return ESP_ERR_NOT_FOUND;
     }
 
-    afe_config_t *afe_cfg = afe_config_init("MM", s_models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
-    if (afe_cfg == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
+    /* 啟用 2-Mic + 1-Ref ("MMR") 回音消除與自動增益控制 */
+    afe_config_t *afe_cfg = afe_config_init("MMR", s_models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
+    if (afe_cfg == NULL) return ESP_ERR_NO_MEM;
     afe_cfg->wakenet_init           = true;
-    afe_cfg->aec_init               = false;
+    afe_cfg->aec_init               = true;
     afe_cfg->se_init                = true;
     afe_cfg->vad_init               = true;
+    afe_cfg->agc_init               = true;
     afe_cfg->memory_alloc_mode      = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_cfg->afe_perferred_core     = SR_CORE_ID;
     afe_cfg->afe_perferred_priority = 5;
@@ -167,15 +154,11 @@ esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state
     s_afe_handle = esp_afe_handle_from_config(afe_cfg);
     s_afe_data   = (s_afe_handle != NULL) ? s_afe_handle->create_from_config(afe_cfg) : NULL;
     afe_config_free(afe_cfg);
-    if (s_afe_data == NULL) {
-        return ESP_FAIL;
-    }
+    if (s_afe_data == NULL) return ESP_FAIL;
 
     s_multinet = esp_mn_handle_from_name(mn_name);
     s_mn_data  = (s_multinet != NULL) ? s_multinet->create(mn_name, SR_CMD_LISTEN_TIMEOUT_MS) : NULL;
-    if (s_mn_data == NULL) {
-        return ESP_FAIL;
-    }
+    if (s_mn_data == NULL) return ESP_FAIL;
 
     esp_mn_commands_alloc(s_multinet, s_mn_data);
     esp_mn_commands_clear();
@@ -190,16 +173,16 @@ esp_err_t sr_engine_init(voice_cmd_callback_t cmd_cb, sr_state_change_cb_t state
 
     s_rb_struct  = heap_caps_calloc(1, sizeof(StaticRingbuffer_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     s_rb_storage = heap_caps_malloc(SR_PCM_RINGBUF_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_rb_struct == NULL || s_rb_storage == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
+    if (s_rb_struct == NULL || s_rb_storage == NULL) return ESP_ERR_NO_MEM;
+
     s_pcm_rb = xRingbufferCreateStatic(SR_PCM_RINGBUF_BYTES, RINGBUF_TYPE_BYTEBUF,
                                        s_rb_storage, s_rb_struct);
     audio_engine_register_pcm_tap(on_audio_pcm_tap);
 
     s_initialized = true;
     set_sr_state(SR_STATE_WAKE_LISTEN);
-    ESP_LOGI(TAG, "ESP-SR 就緒 (WN=%s, MN=%s, 指令數=%d)", wn_name, mn_name, s_next_cmd_id - 1);
+    ESP_LOGI(TAG, "ESP-SR 就緒 (MMR AEC+AGC, WN=%s, MN=%s, 指令數=%d)",
+             wn_name, mn_name, s_next_cmd_id - 1);
     return ESP_OK;
 }
 
@@ -213,11 +196,10 @@ static void return_to_wake_listen(void)
 
 bool sr_engine_poll_timeout(void)
 {
-    if (s_state == SR_STATE_CMD_LISTEN) {
-        if (((esp_timer_get_time() / 1000LL) - s_cmd_start_ms) >= (int64_t)SR_CMD_LISTEN_TIMEOUT_MS) {
-            return_to_wake_listen();
-            return true;
-        }
+    if (s_state == SR_STATE_CMD_LISTEN &&
+        ((esp_timer_get_time() / 1000LL) - s_cmd_start_ms) >= (int64_t)SR_CMD_LISTEN_TIMEOUT_MS) {
+        return_to_wake_listen();
+        return true;
     }
     return false;
 }
@@ -225,25 +207,43 @@ bool sr_engine_poll_timeout(void)
 static void task_sr_feed(void *arg)
 {
     (void)arg;
-    const size_t chunk_bytes = (size_t)s_afe_handle->get_feed_chunksize(s_afe_data) *
-                               (size_t)s_afe_handle->get_feed_channel_num(s_afe_data) * sizeof(int16_t);
-    uint8_t *feed_buf = heap_caps_malloc(chunk_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (feed_buf == NULL) {
+    const size_t chunk_frames = (size_t)s_afe_handle->get_feed_chunksize(s_afe_data);
+    const size_t feed_ch      = (size_t)s_afe_handle->get_feed_channel_num(s_afe_data);
+    const size_t mic_bytes    = chunk_frames * 2U * sizeof(int16_t);
+
+    int16_t *mic_buf  = heap_caps_malloc(mic_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int16_t *ref_buf  = heap_caps_malloc(chunk_frames * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int16_t *feed_buf = heap_caps_malloc(chunk_frames * feed_ch * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (mic_buf == NULL || ref_buf == NULL || feed_buf == NULL) {
+        heap_caps_free(mic_buf);
+        heap_caps_free(ref_buf);
+        heap_caps_free(feed_buf);
         vTaskDelete(NULL);
         return;
     }
 
+    uint8_t *mic_raw = (uint8_t *)mic_buf;
     size_t filled = 0U;
     while (1) {
         size_t item_size = 0U;
         uint8_t *item = (uint8_t *)xRingbufferReceiveUpTo(
-            s_pcm_rb, &item_size, pdMS_TO_TICKS(50), chunk_bytes - filled);
+            s_pcm_rb, &item_size, pdMS_TO_TICKS(50), mic_bytes - filled);
         if (item != NULL && item_size > 0U) {
-            memcpy(feed_buf + filled, item, item_size);
+            memcpy(mic_raw + filled, item, item_size);
             vRingbufferReturnItem(s_pcm_rb, item);
             filled += item_size;
-            if (filled >= chunk_bytes) {
-                s_afe_handle->feed(s_afe_data, (const int16_t *)feed_buf);
+            if (filled >= mic_bytes) {
+                if (feed_ch == 3U) {
+                    (void)aec_ref_read(ref_buf, chunk_frames);
+                    for (size_t i = 0; i < chunk_frames; i++) {
+                        feed_buf[i * 3U]      = mic_buf[i * 2U];
+                        feed_buf[i * 3U + 1U] = mic_buf[i * 2U + 1U];
+                        feed_buf[i * 3U + 2U] = ref_buf[i];
+                    }
+                } else {
+                    memcpy(feed_buf, mic_buf, mic_bytes);
+                }
+                s_afe_handle->feed(s_afe_data, feed_buf);
                 filled = 0U;
             }
         }
@@ -259,26 +259,24 @@ static void task_sr_detect(void *arg)
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
-
+        if (res->data != NULL && res->data_size > 0) {
+            audio_engine_push_afe_mono(res->data, (size_t)res->data_size / sizeof(int16_t));
+        }
         if (s_state == SR_STATE_WAKE_LISTEN) {
             if (res->wakeup_state == WAKENET_DETECTED) {
                 s_afe_handle->disable_wakenet(s_afe_data);
                 s_multinet->clean(s_mn_data);
                 s_cmd_start_ms = esp_timer_get_time() / 1000LL;
                 set_sr_state(SR_STATE_CMD_LISTEN);
-                if (s_cmd_cb != NULL) {
-                    s_cmd_cb(VOICE_CMD_WAKEUP);
-                }
+                if (s_cmd_cb != NULL) s_cmd_cb(VOICE_CMD_WAKEUP);
             }
             continue;
         }
-
         if (s_state == SR_STATE_CMD_LISTEN) {
             if (sr_engine_poll_timeout()) {
                 ESP_LOGI(TAG, "離線命令視窗逾時 (6000ms)，退回喚醒監聽");
                 continue;
             }
-
             esp_mn_state_t mn_state = s_multinet->detect(s_mn_data, res->data);
             if (mn_state == ESP_MN_STATE_DETECTED) {
                 esp_mn_results_t *mn_res = s_multinet->get_results(s_mn_data);
@@ -299,12 +297,8 @@ static void task_sr_detect(void *arg)
 
 esp_err_t sr_engine_start_tasks(void)
 {
-    if (!s_initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (s_tasks_started) {
-        return ESP_OK;
-    }
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (s_tasks_started) return ESP_OK;
 
     size_t drain_sz = 0U;
     void *drain_ptr = NULL;
@@ -318,33 +312,21 @@ esp_err_t sr_engine_start_tasks(void)
                                 NULL, SR_DETECT_TASK_PRIO, NULL, SR_CORE_ID) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-
     s_tasks_started = true;
     return ESP_OK;
 }
 
-sr_listen_state_t sr_engine_get_state(void)
-{
-    return s_state;
-}
-
-size_t sr_engine_get_registered_cmd_count(void)
-{
-    return (s_next_cmd_id > 1) ? (size_t)(s_next_cmd_id - 1) : 0U;
-}
+sr_listen_state_t sr_engine_get_state(void) { return s_state; }
+size_t sr_engine_get_registered_cmd_count(void) { return (s_next_cmd_id > 1) ? (size_t)(s_next_cmd_id - 1) : 0U; }
 
 voice_cmd_id_t sr_engine_get_mapped_cmd(int mn_cmd_id)
 {
-    if (mn_cmd_id < 1 || mn_cmd_id >= s_next_cmd_id || mn_cmd_id > MAX_DYNAMIC_CMDS) {
-        return VOICE_CMD_NONE;
-    }
+    if (mn_cmd_id < 1 || mn_cmd_id >= s_next_cmd_id || mn_cmd_id > MAX_DYNAMIC_CMDS) return VOICE_CMD_NONE;
     return s_id_to_cmd[mn_cmd_id];
 }
 
 void sr_engine_set_state_for_test(sr_listen_state_t state)
 {
-    if (state == SR_STATE_CMD_LISTEN) {
-        s_cmd_start_ms = esp_timer_get_time() / 1000LL;
-    }
+    if (state == SR_STATE_CMD_LISTEN) s_cmd_start_ms = esp_timer_get_time() / 1000LL;
     set_sr_state(state);
 }

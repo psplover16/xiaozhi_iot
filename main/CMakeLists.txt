@@ -4,7 +4,6 @@ idf_component_register(
         "app_storage_sync.c"
         "app_media_voice.c"
         "app_sr_bridge.c"
-	"app_sr_bridge.c"
     INCLUDE_DIRS
         "."
     REQUIRES

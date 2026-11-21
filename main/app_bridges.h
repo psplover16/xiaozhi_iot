@@ -6,6 +6,7 @@
 #include "esp_err.h"
 #include "system_types.h"
 #include "audio_engine.h"
+#include "net_manager.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,6 +32,9 @@ void      app_voice_on_command(voice_cmd_id_t cmd);
 esp_err_t app_voice_on_tts_ready(const uint8_t *audio_data, size_t audio_len,
                                  const char *content_type, void *ctx);
 esp_err_t app_voice_on_play_file(const char *filepath, void *ctx);
+bool      app_voice_is_audio_busy(void *ctx);
+esp_err_t app_voice_get_sys_status(sys_status_snapshot_t *out_status, void *ctx);
+esp_err_t app_voice_exec_ctrl_cmd(ctrl_cmd_id_t cmd, void *ctx);
 
 #ifdef __cplusplus
 }

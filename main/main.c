@@ -130,6 +130,9 @@ void app_main(void)
         .get_storage_status = app_storage_get_status,
         .on_tts_audio_ready = app_voice_on_tts_ready,
         .on_play_audio_file = app_voice_on_play_file,
+        .is_audio_busy      = app_voice_is_audio_busy,
+        .get_sys_status     = app_voice_get_sys_status,
+        .exec_ctrl_cmd      = app_voice_exec_ctrl_cmd,
         .user_ctx           = NULL,
     };
     net_manager_register_hooks(&net_hooks);

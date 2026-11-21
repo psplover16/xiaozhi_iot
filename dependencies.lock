@@ -94,12 +94,23 @@ dependencies:
     - esp32c61
     - esp32h4
     version: 1.0.2
+  espressif/mdns:
+    component_hash: 2fa43caa78cc170842255bc7bf71f306bc815cae12e9496bfb12372423019ac7
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.15.1
   idf:
     source:
       type: idf
     version: 6.1.1
 direct_dependencies:
 - espressif/esp-sr
-manifest_hash: d0d3c0971b6838166403f3104fffba5eb3e774e6ce1c1e7ad86c447f7cb02682
+- espressif/mdns
+manifest_hash: ff34e072ae4c9ac9b9607410a9757a3ce5d11ab8100253155fddc23036f30126
 target: esp32s3
 version: 3.0.0

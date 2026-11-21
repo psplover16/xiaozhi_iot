@@ -12,16 +12,14 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 
 static const char *TAG = "net_manager";
 
 #define NVS_NAMESPACE_CFG       "xiaozhi_cfg"
 #define NVS_KEY_SYS_CFG         "sys_cfg"
-#define STA_MAX_RETRY_COUNT     3U
-#define STA_PROBE_INTERVAL_MS   30000U
 #define SYNC_RETRY_INTERVAL_MS  10000U
-#define BTN_DEBOUNCE_MS         50U
 #define BTN_POLL_INTERVAL_MS    20U
 #define LIVE_QUEUE_LEN          32U
 #define LIVE_UPLOAD_BATCH_MAX   16U
@@ -32,15 +30,9 @@ static TaskHandle_t         s_net_task          = NULL;
 static net_manager_hooks_t  s_hooks             = {0};
 
 static sys_config_t         s_cfg;
-static volatile net_mode_t  s_target_mode       = NET_MODE_OFFLINE;
-static volatile net_mode_t  s_active_mode       = NET_MODE_OFFLINE;
-static volatile bool        s_mode_dirty        = false;
-static volatile bool        s_sta_degraded      = false;
 static volatile bool        s_sta_has_ip        = false;
 static volatile bool        s_need_got_ip_cb    = false;
 static volatile bool        s_need_history_sync = false;
-static volatile uint8_t     s_sta_retry_cnt     = 0;
-static TickType_t           s_last_probe_tick   = 0;
 static TickType_t           s_last_sync_tick    = 0;
 static bool                 s_initialized       = false;
 
@@ -129,6 +121,12 @@ bool net_mgr_is_sta_connected(void)
     return s_sta_has_ip;
 }
 
+void net_mgr_set_sta_connected(bool connected, const char *ip_str)
+{
+    (void)ip_str;
+    s_sta_has_ip = connected;
+}
+
 void net_mgr_query_storage_status(uint16_t *out_eeprom_cnt,
                                   bool *out_sd_mounted,
                                   uint32_t *out_sd_free_mb)
@@ -150,6 +148,11 @@ void net_mgr_notify_mode(net_mode_t mode, const char *info)
     }
 }
 
+void net_mgr_notify_got_ip(void)
+{
+    s_need_got_ip_cb = true;
+}
+
 void net_mgr_notify_play_file(const char *filepath)
 {
     if (s_hooks.on_play_audio_file != NULL && filepath != NULL) {
@@ -165,91 +168,53 @@ void net_mgr_notify_tts_ready(const uint8_t *data, size_t len,
     }
 }
 
+bool net_mgr_is_audio_busy(void)
+{
+    if (s_hooks.is_audio_busy != NULL) {
+        return s_hooks.is_audio_busy(s_hooks.user_ctx);
+    }
+    return false;
+}
+
+esp_err_t net_mgr_get_sys_status(sys_status_snapshot_t *out_status)
+{
+    if (out_status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out_status, 0, sizeof(sys_status_snapshot_t));
+    if (s_hooks.get_sys_status != NULL) {
+        return s_hooks.get_sys_status(out_status, s_hooks.user_ctx);
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t net_mgr_exec_ctrl_cmd(ctrl_cmd_id_t cmd)
+{
+    if (s_hooks.exec_ctrl_cmd != NULL) {
+        return s_hooks.exec_ctrl_cmd(cmd, s_hooks.user_ctx);
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+void net_mgr_trigger_history_sync(void)
+{
+    s_need_history_sync = true;
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
     (void)arg;
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        (void)esp_wifi_connect();
+        net_mode_ctrl_on_sta_start();
     } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        s_sta_has_ip = false;
-        sync_engine_lock_live();
-        if (s_target_mode == NET_MODE_ONLINE && !s_sta_degraded) {
-            if (s_sta_retry_cnt < STA_MAX_RETRY_COUNT) {
-                s_sta_retry_cnt++;
-                (void)esp_wifi_connect();
-            } else {
-                ESP_LOGE(TAG, "STA 連續失敗超過 %u 次，自動降級為離線模式",
-                         STA_MAX_RETRY_COUNT);
-                s_sta_degraded    = true;
-                s_active_mode     = NET_MODE_OFFLINE;
-                s_last_probe_tick = xTaskGetTickCount();
-                (void)esp_wifi_stop();
-                net_mgr_notify_mode(NET_MODE_OFFLINE, "DEGRADED");
-            }
-        }
+        net_mode_ctrl_on_sta_disconnected();
     } else if (base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)event_data;
         char ip_str[20];
         snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&evt->ip_info.ip));
         ESP_LOGI(TAG, "STA 取得 IP: %s", ip_str);
-
-        s_sta_retry_cnt = 0;
-        s_sta_degraded  = false;
-        s_sta_has_ip    = true;
-        if (s_target_mode == NET_MODE_ONLINE) {
-            s_active_mode       = NET_MODE_ONLINE;
-            s_need_got_ip_cb    = true;
-            s_need_history_sync = true;
-            sync_engine_lock_live();
-            net_mgr_notify_mode(NET_MODE_ONLINE, ip_str);
-        }
-    }
-}
-
-static void apply_mode_transition(net_mode_t mode)
-{
-    web_config_stop();
-    (void)esp_wifi_stop();
-    s_sta_has_ip    = false;
-    s_sta_degraded  = false;
-    s_sta_retry_cnt = 0;
-    sync_engine_lock_live();
-
-    sys_config_t cfg;
-    net_mgr_get_config_copy(&cfg);
-
-    if (mode == NET_MODE_OFFLINE) {
-        (void)esp_wifi_set_mode(WIFI_MODE_NULL);
-        s_active_mode = NET_MODE_OFFLINE;
-        net_mgr_notify_mode(NET_MODE_OFFLINE, "OFFLINE");
-        return;
-    }
-
-    if (mode == NET_MODE_ONLINE) {
-        if (cfg.wifi_ssid[0] == '\0') {
-            s_sta_degraded    = true;
-            s_active_mode     = NET_MODE_OFFLINE;
-            s_last_probe_tick = xTaskGetTickCount();
-            net_mgr_notify_mode(NET_MODE_OFFLINE, "NO_SSID");
-            return;
-        }
-        wifi_config_t sta_cfg = {0};
-        strncpy((char *)sta_cfg.sta.ssid, cfg.wifi_ssid, sizeof(sta_cfg.sta.ssid) - 1U);
-        strncpy((char *)sta_cfg.sta.password, cfg.wifi_pass, sizeof(sta_cfg.sta.password) - 1U);
-        sta_cfg.sta.threshold.authmode = (cfg.wifi_pass[0] != '\0') ? WIFI_AUTH_WPA2_PSK
-                                                                    : WIFI_AUTH_OPEN;
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_mode(WIFI_MODE_STA));
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_start());
-        s_active_mode = NET_MODE_ONLINE;
-        net_mgr_notify_mode(NET_MODE_ONLINE, cfg.wifi_ssid);
-        return;
-    }
-
-    if (mode == NET_MODE_WEB_CFG) {
-        s_active_mode = (web_config_start(&cfg) == ESP_OK) ? NET_MODE_WEB_CFG
-                                                           : NET_MODE_OFFLINE;
+        net_mode_ctrl_on_got_ip(ip_str);
     }
 }
 
@@ -269,8 +234,7 @@ static void process_record_pipeline(void)
         return;
     }
 
-    bool can_live = (s_active_mode == NET_MODE_ONLINE) &&
-                    s_sta_has_ip && sync_engine_is_live_unlocked();
+    bool can_live = net_mode_ctrl_is_cloud_active() && sync_engine_is_live_unlocked();
     if (can_live && net_mgr_http_upload_batch(batch, count) == ESP_OK) {
         return;
     }
@@ -284,14 +248,9 @@ static void process_record_pipeline(void)
 static void task_net_manager(void *arg)
 {
     (void)arg;
-    uint32_t pressed_ms = 0;
-    bool btn_handled    = false;
 
     while (1) {
-        if (s_mode_dirty) {
-            s_mode_dirty = false;
-            apply_mode_transition(s_target_mode);
-        }
+        net_mode_ctrl_poll();
 
         if (s_need_got_ip_cb) {
             s_need_got_ip_cb = false;
@@ -300,8 +259,7 @@ static void task_net_manager(void *arg)
             }
         }
 
-        if (s_active_mode == NET_MODE_ONLINE && s_sta_has_ip &&
-            !sync_engine_is_live_unlocked()) {
+        if (net_mode_ctrl_is_cloud_active() && !sync_engine_is_live_unlocked()) {
             TickType_t now = xTaskGetTickCount();
             if (s_need_history_sync ||
                 (now - s_last_sync_tick) >= pdMS_TO_TICKS(SYNC_RETRY_INTERVAL_MS)) {
@@ -313,26 +271,8 @@ static void task_net_manager(void *arg)
 
         process_record_pipeline();
 
-        if (s_target_mode == NET_MODE_ONLINE && s_sta_degraded) {
-            TickType_t now = xTaskGetTickCount();
-            if ((now - s_last_probe_tick) >= pdMS_TO_TICKS(STA_PROBE_INTERVAL_MS)) {
-                s_last_probe_tick = now;
-                s_sta_degraded    = false;
-                s_sta_retry_cnt   = 0;
-                (void)esp_wifi_start();
-            }
-        }
-
-        if (board_btn_is_pressed()) {
-            pressed_ms += BTN_POLL_INTERVAL_MS;
-            if (pressed_ms >= BTN_DEBOUNCE_MS && !btn_handled) {
-                btn_handled = true;
-                (void)net_manager_set_mode((net_mode_t)((s_target_mode + 1) % 3));
-            }
-        } else {
-            pressed_ms  = 0;
-            btn_handled = false;
-        }
+        int64_t now_ms = esp_timer_get_time() / 1000LL;
+        net_mode_ctrl_process_button(board_btn_is_pressed(), now_ms);
 
         vTaskDelay(pdMS_TO_TICKS(BTN_POLL_INTERVAL_MS));
     }
@@ -376,10 +316,7 @@ esp_err_t net_manager_init(void)
                                                &wifi_event_handler, NULL));
 
     load_config_from_nvs();
-    s_target_mode = (board_btn_is_pressed() || s_cfg.wifi_ssid[0] == '\0')
-                        ? NET_MODE_WEB_CFG
-                        : NET_MODE_ONLINE;
-    s_mode_dirty = true;
+    net_mode_ctrl_init(board_btn_is_pressed());
 
     err = voice_cloud_init();
     if (err != ESP_OK) {
@@ -406,17 +343,12 @@ void net_manager_register_hooks(const net_manager_hooks_t *hooks)
 
 esp_err_t net_manager_set_mode(net_mode_t mode)
 {
-    if (mode > NET_MODE_WEB_CFG) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    s_target_mode = mode;
-    s_mode_dirty  = true;
-    return ESP_OK;
+    return net_mode_ctrl_set_legacy_mode(mode);
 }
 
 net_mode_t net_manager_get_mode(void)
 {
-    return s_active_mode;
+    return net_mode_ctrl_get_legacy_mode();
 }
 
 esp_err_t net_manager_submit_record(const sensor_record_t *rec)

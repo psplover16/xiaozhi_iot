@@ -1,7 +1,9 @@
 idf_component_register(
     SRCS
         "net_manager.c"
+        "net_mode_ctrl.c"
         "web_config.c"
+        "web_api.c"
         "sync_engine.c"
         "voice_cloud.c"
     INCLUDE_DIRS
@@ -18,4 +20,7 @@ idf_component_register(
         nvs_flash
         lwip
         esp_psram
+        esp_timer
+        mdns
+        cjson
 )
